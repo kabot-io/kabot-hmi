@@ -18,6 +18,17 @@ class RobotState:
     linear_acceleration: Vector3
     angular_velocity: Vector3
     magnetic_field: Vector3
+    light_left: float = 0.0
+    light_right: float = 0.0
+    current_left: float = 0.0
+    bus_voltage_left: float = 0.0
+    power_left: float = 0.0
+    current_right: float = 0.0
+    bus_voltage_right: float = 0.0
+    power_right: float = 0.0
+    current_supply: float = 0.0
+    bus_voltage_supply: float = 0.0
+    power_supply: float = 0.0
     stamps: dict = None
 
 @dataclass

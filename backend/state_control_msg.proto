@@ -1,0 +1,67 @@
+syntax = "proto3";
+
+message Vector2 {
+    float x = 1;
+    float y = 2;
+}
+
+message Vector3 {
+    float x = 1;
+    float y = 2;
+    float z = 3;
+}
+
+message TimeSpec {
+    uint64 sec = 1;
+    uint32 nanosec = 2;
+}
+
+message Header {
+    uint64 stamp = 1;
+    string frame_id = 2;
+}
+
+message StateScalar {
+    Header header = 1;
+    float state = 2;
+}
+
+message StateVector2 {
+    Header header = 1;
+    Vector2 state = 2;
+}
+
+message StateVector3 {
+    Header header = 1;
+    Vector3 state = 2;
+}
+
+message State {
+    Header header = 1;
+    StateVector2 effort = 2;
+
+    StateVector3 linear_acceleration = 3;
+    StateVector3 angular_velocity = 4;
+    StateVector3 magnetic_field = 5;
+
+    StateScalar distance = 6;
+    StateScalar light_left = 7;
+    StateScalar light_right = 8;
+
+    StateScalar current_left = 9;
+    StateScalar bus_voltage_left = 10;
+    StateScalar power_left = 11;
+
+    StateScalar current_right = 12;
+    StateScalar bus_voltage_right = 13;
+    StateScalar power_right = 14;
+
+    StateScalar current_supply = 15;
+    StateScalar bus_voltage_supply = 16;
+    StateScalar power_supply = 17;
+}
+
+message Control {
+    Header header = 1;
+    StateVector2 effort = 2;
+}

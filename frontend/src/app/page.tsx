@@ -9,12 +9,21 @@ import { Input } from "@/components/ui/input";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown } from 'lucide-react';
+import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft } from 'lucide-react';
 import { UPlotScope } from "@/components/ui/UPlotScope";
 import { SpinBox } from "@/components/ui/spinbox";
 import { ChannelConfig, ScopeState, TriggerType } from "@/types/scope";
 
 const chartColors = ["#2563eb", "#16a34a", "#dc2626", "#d97706", "#9333ea", "#0891b2", "#be185d"];
+const lockedFunctionSignature = "def control(state: RobotState, control: RobotControl) -> RobotControl:";
+
+const enforceLockedFunctionSignature = (src: string) => {
+  const lines = src.split("\n");
+  lines[0] = lockedFunctionSignature;
+  return lines.join("\n");
+};
+
+type ControlDirection = "up" | "down" | "left" | "right";
 
 export default function Home() {
   const monaco = useMonaco();
@@ -61,10 +70,22 @@ export default function Home() {
   
   const [activeWorkspace, setActiveWorkspace] = useState<"code" | "scope" | "firmware">("code");
 
-  const defaultCode = `def control(state: RobotState, control: RobotControl) -> RobotControl:\n    if state.distance < 0.5:\n        control.effort.x = 0\n        control.effort.y = 0\n    else:\n        control.effort.x = 1\n        control.effort.y = 1\n    return control\n`;
+  const defaultCode = `${lockedFunctionSignature}\n    if state.distance < 0.5:\n        control.effort.x = 0\n        control.effort.y = 0\n    else:\n        control.effort.x = 1\n        control.effort.y = 1\n    return control\n`;
   const [code, setCode] = useState(defaultCode);
   
   const [robotIp, setRobotIp] = useState("localhost");
+  const [controlTargetIp, setControlTargetIp] = useState("172.20.10.2");
+  const manualDirectionsRef = useRef<Set<ControlDirection>>(new Set());
+  const [manualDirectionsUI, setManualDirectionsUI] = useState<Set<ControlDirection>>(new Set());
+  const lastManualControlRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+
+  const sendControlTargetIp = (ip: string) => {
+    const normalized = ip.trim();
+    if (!normalized) return;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "set_control_target_ip", ip: normalized }));
+    }
+  };
 
   useEffect(() => {
     // Keep ref in sync
@@ -77,6 +98,9 @@ export default function Home() {
 
   useEffect(() => {
     wsRef.current = new WebSocket(`ws://${robotIp}:8000/ws`);
+    wsRef.current.onopen = () => {
+      sendControlTargetIp(controlTargetIp);
+    };
     wsRef.current.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
@@ -105,13 +129,20 @@ export default function Home() {
           }
           setHzStats(newHz);
           
-          const ts = Date.now();
-          const entry: any = { timestamp: ts };
-          if (d.distance !== undefined) entry['distance'] = d.distance;
-          if (d.effort) { entry['effort.x'] = d.effort.x; entry['effort.y'] = d.effort.y; }
-          if (d.accel) { entry['accel.x'] = d.accel.x; entry['accel.y'] = d.accel.y; entry['accel.z'] = d.accel.z; }
-          if (d.gyro) { entry['gyro.x'] = d.gyro.x; entry['gyro.y'] = d.gyro.y; entry['gyro.z'] = d.gyro.z; }
-          if (d.mag) { entry['mag.x'] = d.mag.x; entry['mag.y'] = d.mag.y; entry['mag.z'] = d.mag.z; }
+            const ts = Date.now();
+            const entry: any = { timestamp: ts };
+            const flattenNumeric = (value: any, path: string[] = []) => {
+              if (typeof value === 'number' && Number.isFinite(value)) {
+                entry[path.join('.')] = value;
+                return;
+              }
+              if (value && typeof value === 'object') {
+                for (const key of Object.keys(value)) {
+                  flattenNumeric(value[key], [...path, key]);
+                }
+              }
+            };
+            flattenNumeric(d);
           
           // Auto-initialize channels if they don't exist
           let addedNewChannel = false;
@@ -177,16 +208,121 @@ export default function Home() {
     return () => wsRef.current?.close();
   }, [robotIp]);
 
-  const handleEditorMount = (editor: any, monacoInstance: any) => {
-    try {
-        const ce = require('constrained-editor-plugin').constrainedEditor || require('constrained-editor-plugin').constrainEditor;
-        const constrainedInstance = ce(monacoInstance);
-        constrainedInstance.initializeIn(editor);
-        constrainedInstance.addRestrictionsTo(editor.getModel(), [
-          { range: [1, 1, 1, 71], allowMultiline: false },
-        ]);
-    } catch(e) {}
+  const handleEditorMount = (editor: any) => {
+    const model = editor.getModel();
+    if (!model) return;
+    let applyingFix = false;
+    editor.onDidChangeModelContent(() => {
+      if (applyingFix) return;
+      const content = model.getValue();
+      const normalized = enforceLockedFunctionSignature(content);
+      if (normalized === content) return;
+      applyingFix = true;
+      model.pushEditOperations(
+        [],
+        [{ range: model.getFullModelRange(), text: normalized }],
+        () => null,
+      );
+      applyingFix = false;
+    });
   };
+
+  const sendManualControl = (x: number, y: number) => {
+    if (lastManualControlRef.current.x === x && lastManualControlRef.current.y === y) {
+      return;
+    }
+    lastManualControlRef.current = { x, y };
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "control", effort: { x, y } }));
+    }
+  };
+
+  const computeManualVector = (dirs: Set<ControlDirection>) => {
+    const vectors: Record<ControlDirection, { x: number; y: number }> = {
+      up: { x: 1, y: 1 },
+      down: { x: -1, y: -1 },
+      left: { x: -1, y: 1 },
+      right: { x: 1, y: -1 },
+    };
+    let x = 0;
+    let y = 0;
+    for (const dir of dirs) {
+      x += vectors[dir].x;
+      y += vectors[dir].y;
+    }
+    return {
+      x: Math.max(-1, Math.min(1, x)),
+      y: Math.max(-1, Math.min(1, y)),
+    };
+  };
+
+  const updateManualDirections = (mutator: (next: Set<ControlDirection>) => void) => {
+    const next = new Set(manualDirectionsRef.current);
+    mutator(next);
+    manualDirectionsRef.current = next;
+    setManualDirectionsUI(next);
+    const vector = computeManualVector(next);
+    sendManualControl(vector.x, vector.y);
+  };
+
+  const handleManualDirectionPress = (direction: ControlDirection) => {
+    updateManualDirections((next) => next.add(direction));
+  };
+
+  const handleManualDirectionRelease = (direction: ControlDirection) => {
+    updateManualDirections((next) => next.delete(direction));
+  };
+
+  const clearManualDirections = () => {
+    updateManualDirections((next) => next.clear());
+  };
+
+  useEffect(() => {
+    const keyToDirection: Record<string, ControlDirection> = {
+      ArrowUp: "up",
+      ArrowDown: "down",
+      ArrowLeft: "left",
+      ArrowRight: "right",
+    };
+
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (activeWorkspace !== "scope") return;
+      const direction = keyToDirection[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      if (!manualDirectionsRef.current.has(direction)) {
+        handleManualDirectionPress(direction);
+      }
+    };
+
+    const onKeyUp = (event: KeyboardEvent) => {
+      const direction = keyToDirection[event.key];
+      if (!direction) return;
+      event.preventDefault();
+      if (manualDirectionsRef.current.has(direction)) {
+        handleManualDirectionRelease(direction);
+      }
+    };
+
+    const onWindowBlur = () => {
+      clearManualDirections();
+    };
+
+    window.addEventListener("keydown", onKeyDown);
+    window.addEventListener("keyup", onKeyUp);
+    window.addEventListener("blur", onWindowBlur);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown);
+      window.removeEventListener("keyup", onKeyUp);
+      window.removeEventListener("blur", onWindowBlur);
+    };
+  }, [activeWorkspace]);
+
+  useEffect(() => {
+    if (activeWorkspace !== "scope") {
+      clearManualDirections();
+    }
+  }, [activeWorkspace]);
 
   const handleValidate = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -441,7 +577,7 @@ export default function Home() {
         )}
 
         {activeWorkspace === "scope" && (
-            <div className="h-16 border-b flex items-center px-4 gap-4 bg-background shrink-0 overflow-x-auto">
+            <div className="h-16 border-b flex items-center px-4 gap-4 bg-background shrink-0 overflow-x-auto overflow-y-visible">
                 <div className="flex items-center gap-2 shrink-0">
                     <Button 
                       variant={isPaused ? "default" : "outline"} size="sm" className="h-8 font-bold"
@@ -522,6 +658,79 @@ export default function Home() {
                         />
                     </div>
 
+                    <div className="flex items-center gap-2 px-3 border-l border-border/50 shrink-0">
+                        <div className="flex items-center gap-1.5">
+                            <span className="text-[9px] uppercase font-bold text-muted-foreground tracking-wider">Manual</span>
+                            <Button
+                              variant={manualDirectionsUI.has("up") ? "default" : "outline"}
+                              size="icon"
+                              className="h-5 w-5"
+                              title="Forward (Arrow Up)"
+                              onMouseDown={() => handleManualDirectionPress("up")}
+                              onMouseUp={() => handleManualDirectionRelease("up")}
+                              onMouseLeave={() => handleManualDirectionRelease("up")}
+                            >
+                              <ChevronUp className="w-2.5 h-2.5" />
+                            </Button>
+                            <Button
+                              variant={manualDirectionsUI.has("left") ? "default" : "outline"}
+                              size="icon"
+                              className="h-5 w-5"
+                              title="Left (Arrow Left)"
+                              onMouseDown={() => handleManualDirectionPress("left")}
+                              onMouseUp={() => handleManualDirectionRelease("left")}
+                              onMouseLeave={() => handleManualDirectionRelease("left")}
+                            >
+                              <ChevronLeft className="w-2.5 h-2.5" />
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="icon"
+                              className="h-5 w-5"
+                              title="Release"
+                              onClick={clearManualDirections}
+                            >
+                              <Square className="w-2 h-2" />
+                            </Button>
+                            <Button
+                              variant={manualDirectionsUI.has("right") ? "default" : "outline"}
+                              size="icon"
+                              className="h-5 w-5"
+                              title="Right (Arrow Right)"
+                              onMouseDown={() => handleManualDirectionPress("right")}
+                              onMouseUp={() => handleManualDirectionRelease("right")}
+                              onMouseLeave={() => handleManualDirectionRelease("right")}
+                            >
+                              <ArrowRight className="w-2.5 h-2.5" />
+                            </Button>
+                            <Button
+                              variant={manualDirectionsUI.has("down") ? "default" : "outline"}
+                              size="icon"
+                              className="h-5 w-5"
+                              title="Backward (Arrow Down)"
+                              onMouseDown={() => handleManualDirectionPress("down")}
+                              onMouseUp={() => handleManualDirectionRelease("down")}
+                              onMouseLeave={() => handleManualDirectionRelease("down")}
+                            >
+                              <ChevronDown className="w-2.5 h-2.5" />
+                            </Button>
+                            <Input
+                              value={controlTargetIp}
+                              onChange={(e) => setControlTargetIp(e.target.value)}
+                              onBlur={() => sendControlTargetIp(controlTargetIp)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") {
+                                  e.preventDefault();
+                                  sendControlTargetIp(controlTargetIp);
+                                }
+                              }}
+                              className="h-5 w-24 text-[9px] font-mono px-1.5"
+                              placeholder="IP"
+                              title="UDP target IP for control messages"
+                            />
+                        </div>
+                    </div>
+
                 </div>
             </div>
         )}
@@ -557,7 +766,7 @@ export default function Home() {
                         height="100%"
                         defaultLanguage="python"
                         value={code}
-                        onChange={(val) => setCode(val || "")}
+                        onChange={(val) => setCode(enforceLockedFunctionSignature(val || lockedFunctionSignature))}
                         onMount={handleEditorMount}
                         options={{ fontFamily: '"Hack", monospace', minimap: { enabled: false }, roundedSelection: false, scrollBeyondLastLine: false }}
                       />
