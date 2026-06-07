@@ -15,7 +15,6 @@
     "@react-three/fiber": "^9.6.1",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "constrained-editor-plugin": "^1.4.0",
     "framer-motion": "^12.40.0",
     "hack-font": "^3.3.0",
     "lucide-react": "^1.17.0",

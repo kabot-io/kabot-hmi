@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
-import Editor, { useMonaco } from "@monaco-editor/react";
+import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Checkbox } from "@/components/ui/checkbox";
@@ -9,24 +9,42 @@ import { Input } from "@/components/ui/input";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft } from 'lucide-react';
+import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft, Copy } from 'lucide-react';
 import { UPlotScope } from "@/components/ui/UPlotScope";
 import { SpinBox } from "@/components/ui/spinbox";
 import { ChannelConfig, ScopeState, TriggerType } from "@/types/scope";
 
 const chartColors = ["#2563eb", "#16a34a", "#dc2626", "#d97706", "#9333ea", "#0891b2", "#be185d"];
 const lockedFunctionSignature = "def control(state: RobotState, control: RobotControl) -> RobotControl:";
-
-const enforceLockedFunctionSignature = (src: string) => {
-  const lines = src.split("\n");
-  lines[0] = lockedFunctionSignature;
-  return lines.join("\n");
-};
+const NEW_SCRIPT_OPTION = "__new__";
 
 type ControlDirection = "up" | "down" | "left" | "right";
 
+const scriptSchema = {
+  state: {
+    distance: "float",
+    effort: { x: "float", y: "float" },
+    linear_acceleration: { x: "float", y: "float", z: "float" },
+    angular_velocity: { x: "float", y: "float", z: "float" },
+    magnetic_field: { x: "float", y: "float", z: "float" },
+    light_left: "float",
+    light_right: "float",
+    current_left: "float",
+    bus_voltage_left: "float",
+    power_left: "float",
+    current_right: "float",
+    bus_voltage_right: "float",
+    power_right: "float",
+    current_supply: "float",
+    bus_voltage_supply: "float",
+    power_supply: "float",
+  },
+  control: {
+    effort: { x: "float", y: "float" },
+  },
+} as const;
+
 export default function Home() {
-  const monaco = useMonaco();
   const [logs, setLogs] = useState<string[]>([]);
   const [verifyLogs, setVerifyLogs] = useState<string[]>([]);
   const [stateData, setStateData] = useState<any>({});
@@ -66,18 +84,42 @@ export default function Home() {
   
   const [isRunning, setIsRunning] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
+  const editorRef = useRef<any>(null);
   const plotContainerRef = useRef<HTMLDivElement>(null);
   
   const [activeWorkspace, setActiveWorkspace] = useState<"code" | "scope" | "firmware">("code");
 
   const defaultCode = `${lockedFunctionSignature}\n    if state.distance < 0.5:\n        control.effort.x = 0\n        control.effort.y = 0\n    else:\n        control.effort.x = 1\n        control.effort.y = 1\n    return control\n`;
   const [code, setCode] = useState(defaultCode);
+  const [scriptName, setScriptName] = useState("control.py");
+  const [savedScripts, setSavedScripts] = useState<string[]>([]);
+  const [scriptPickerValue, setScriptPickerValue] = useState<string>(NEW_SCRIPT_OPTION);
   
   const [robotIp, setRobotIp] = useState("localhost");
   const [controlTargetIp, setControlTargetIp] = useState("172.20.10.2");
+  const [connectedRobot, setConnectedRobot] = useState<any>(null);
+  const [discoveredRobots, setDiscoveredRobots] = useState<any[]>([]);
+  const [selectedRobotSerial, setSelectedRobotSerial] = useState<string>("");
+  const [isScanning, setIsScanning] = useState(false);
+  const [scriptsPath, setScriptsPath] = useState("backend/scripts");
   const manualDirectionsRef = useRef<Set<ControlDirection>>(new Set());
   const [manualDirectionsUI, setManualDirectionsUI] = useState<Set<ControlDirection>>(new Set());
   const lastManualControlRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
+  const [copiedPath, setCopiedPath] = useState<string | null>(null);
+
+  const getEditorCode = () => {
+    if (editorRef.current) {
+      return editorRef.current.getValue();
+    }
+    return code;
+  };
+
+  const setEditorCode = (nextCode: string) => {
+    setCode(nextCode);
+    if (editorRef.current) {
+      editorRef.current.setValue(nextCode);
+    }
+  };
 
   const sendControlTargetIp = (ip: string) => {
     const normalized = ip.trim();
@@ -85,6 +127,39 @@ export default function Home() {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "set_control_target_ip", ip: normalized }));
     }
+  };
+
+  const sendScriptsPath = (path: string) => {
+    const normalized = path.trim();
+    if (!normalized) return;
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "set_scripts_path", path: normalized }));
+    }
+  };
+
+  const requestScriptsList = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "list_scripts" }));
+    }
+  };
+
+  const saveCurrentScript = () => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "save_script", name: scriptName, code: getEditorCode() }));
+    }
+  };
+
+  const loadScript = (name: string) => {
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      wsRef.current.send(JSON.stringify({ type: "load_script", name }));
+    }
+  };
+
+  const startNewScript = () => {
+    setScriptPickerValue(NEW_SCRIPT_OPTION);
+    setScriptName("new_script.py");
+    setEditorCode(defaultCode);
+    setVerifyLogs(["New script template created."]);
   };
 
   useEffect(() => {
@@ -100,13 +175,67 @@ export default function Home() {
     wsRef.current = new WebSocket(`ws://${robotIp}:8000/ws`);
     wsRef.current.onopen = () => {
       sendControlTargetIp(controlTargetIp);
+      sendScriptsPath(scriptsPath);
+      requestScriptsList();
+    };
+    wsRef.current.onclose = () => {
+      setIsRunning(false);
+      setIsScanning(false);
     };
     wsRef.current.onmessage = (event) => {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "log") {
           setLogs(prev => [...prev.slice(-40), msg.data]);
-          if (msg.data.includes("Runtime Error:") || msg.data === "Stopped.") setIsRunning(false);
+          if (msg.data.includes("Runtime Error:") || msg.data.includes("Stopped user script.")) setIsRunning(false);
+          if (msg.data.includes("Discovery sweep finished. No robots found.")) setIsScanning(false);
+        } else if (msg.type === "robots_discovered") {
+          setDiscoveredRobots(msg.robots || []);
+          setIsScanning(false);
+        } else if (msg.type === "validation_result") {
+          if (msg.ok) {
+            setVerifyLogs([msg.message || "Validation successful."]);
+          } else {
+            setVerifyLogs([msg.message || "Validation failed."]);
+          }
+        } else if (msg.type === "run_result") {
+          if (msg.ok) {
+            setVerifyLogs(["Validation successful.", msg.message || "Running."]);
+          } else {
+            setVerifyLogs([msg.message || "Run failed."]);
+            setIsRunning(false);
+          }
+        } else if (msg.type === "runtime_status") {
+          setIsRunning(!!msg.active);
+        } else if (msg.type === "scripts_config") {
+          if (typeof msg.path === "string" && msg.path.trim()) {
+            setScriptsPath(msg.path);
+          }
+        } else if (msg.type === "scripts_list") {
+          const scripts = Array.isArray(msg.scripts)
+            ? msg.scripts.filter((s: unknown) => typeof s === "string")
+            : [];
+          setSavedScripts(scripts);
+        } else if (msg.type === "script_saved") {
+          if (typeof msg.name === "string" && msg.name.trim()) {
+            setScriptName(msg.name);
+            setScriptPickerValue(msg.name);
+          }
+          requestScriptsList();
+        } else if (msg.type === "script_loaded") {
+          if (typeof msg.name === "string" && msg.name.trim()) {
+            setScriptName(msg.name);
+            setScriptPickerValue(msg.name);
+          }
+          if (typeof msg.code === "string") {
+            setEditorCode(msg.code);
+          }
+          setVerifyLogs([`Loaded ${msg.name || "script"}.`]);
+        } else if (msg.type === "robot_connected") {
+          setConnectedRobot(msg.robot);
+          setIsScanning(false);
+        } else if (msg.type === "robot_released") {
+          setConnectedRobot(null);
         } else if (msg.type === "state") {
           const d = msg.data;
           const s = msg.stamps || {};
@@ -209,22 +338,8 @@ export default function Home() {
   }, [robotIp]);
 
   const handleEditorMount = (editor: any) => {
-    const model = editor.getModel();
-    if (!model) return;
-    let applyingFix = false;
-    editor.onDidChangeModelContent(() => {
-      if (applyingFix) return;
-      const content = model.getValue();
-      const normalized = enforceLockedFunctionSignature(content);
-      if (normalized === content) return;
-      applyingFix = true;
-      model.pushEditOperations(
-        [],
-        [{ range: model.getFullModelRange(), text: normalized }],
-        () => null,
-      );
-      applyingFix = false;
-    });
+    editorRef.current = editor;
+    editor.setValue(code);
   };
 
   const sendManualControl = (x: number, y: number) => {
@@ -277,6 +392,53 @@ export default function Home() {
     updateManualDirections((next) => next.clear());
   };
 
+  const copyPath = async (path: string) => {
+    try {
+      await navigator.clipboard.writeText(path);
+      setCopiedPath(path);
+      setTimeout(() => setCopiedPath((prev) => (prev === path ? null : prev)), 1000);
+    } catch {
+      setVerifyLogs([`Copy failed for path: ${path}`]);
+    }
+  };
+
+  const renderScriptTree = (node: any, parentPath = "", depth = 0): React.ReactNode => {
+    return Object.entries(node).map(([key, value]) => {
+      const path = parentPath ? `${parentPath}.${key}` : key;
+      if (typeof value === "string") {
+        return (
+          <div
+            key={path}
+            className="flex items-center justify-between gap-2 py-1"
+            style={{ paddingLeft: `${depth * 12}px` }}
+          >
+            <div className="flex items-center gap-2 min-w-0">
+              <span className="font-mono text-xs truncate">{path}</span>
+              <span className="text-[10px] text-muted-foreground shrink-0">{value}</span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              className="h-5 px-1.5 shrink-0"
+              onClick={() => copyPath(path)}
+              title={`Copy ${path}`}
+            >
+              <Copy className="w-3 h-3 mr-1" />
+              <span className="text-[10px]">{copiedPath === path ? "Copied" : "Copy"}</span>
+            </Button>
+          </div>
+        );
+      }
+
+      return (
+        <div key={path} className="py-1" style={{ paddingLeft: `${depth * 12}px` }}>
+          <div className="text-[10px] uppercase font-bold tracking-wide text-muted-foreground">{path}</div>
+          <div>{renderScriptTree(value, path, depth + 1)}</div>
+        </div>
+      );
+    });
+  };
+
   useEffect(() => {
     const keyToDirection: Record<string, ControlDirection> = {
       ArrowUp: "up",
@@ -326,16 +488,21 @@ export default function Home() {
 
   const handleValidate = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "validate", code }));
-      setVerifyLogs(["Running sanity checks on the code..."]);
-      setTimeout(() => setVerifyLogs(prev => [...prev, "Syntax check passed. Output looks clean."]), 500);
+      wsRef.current.send(JSON.stringify({ type: "validate", code: getEditorCode() }));
+      setVerifyLogs(["Running validation..."]);
     }
   };
 
   const handleRun = () => {
+    const runtimeCode = getEditorCode();
+    const body = runtimeCode.split("\n").slice(1).join("\n").trim();
+    if (!body) {
+      setVerifyLogs(["Run blocked: function body is empty."]);
+      return;
+    }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "run", code }));
-      setIsRunning(true);
+      setVerifyLogs(["Validating and activating..."]);
+      wsRef.current.send(JSON.stringify({ type: "run", code: runtimeCode }));
     }
   };
 
@@ -566,13 +733,119 @@ export default function Home() {
                   <Button size="sm" variant="destructive" className="font-bold" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop</Button>
                 )}
                 <div className="w-px h-6 bg-border mx-2" />
-                <Select defaultValue="robot-1">
-                  <SelectTrigger className="w-48 h-8 text-xs border-0 bg-muted/50 focus:ring-0"><SelectValue placeholder="Select Robot" /></SelectTrigger>
+                <Input
+                  value={scriptName}
+                  onChange={(e) => {
+                    setScriptName(e.target.value);
+                    setScriptPickerValue(NEW_SCRIPT_OPTION);
+                  }}
+                  className="w-44 h-8 text-xs font-mono"
+                  placeholder="script name"
+                  title="Script file name"
+                />
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-8"
+                  onClick={saveCurrentScript}
+                  title="Save script to disk"
+                >
+                  Save
+                </Button>
+                <Select
+                  value={scriptPickerValue}
+                  onValueChange={(value) => {
+                    if (value === NEW_SCRIPT_OPTION) {
+                      startNewScript();
+                      return;
+                    }
+                    setScriptPickerValue(value);
+                    loadScript(value);
+                  }}
+                >
+                  <SelectTrigger className="w-44 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
+                    <SelectValue placeholder="Saved scripts" />
+                  </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="robot-1">Kabot Alpha (172.26.25.114)</SelectItem>
-                    <SelectItem value="robot-2">Local Simulator</SelectItem>
+                    <SelectItem value={NEW_SCRIPT_OPTION}>new...</SelectItem>
+                    {savedScripts.map((name) => (
+                      <SelectItem key={name} value={name}>{name}</SelectItem>
+                    ))}
                   </SelectContent>
                 </Select>
+                <div className="flex items-center gap-2">
+                  <Select 
+                    value={selectedRobotSerial} 
+                    onValueChange={(val) => setSelectedRobotSerial(val)}
+                  >
+                    <SelectTrigger className="w-64 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
+                      <SelectValue placeholder="Select Robot" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {discoveredRobots.map(r => {
+                        const uniqueId = `${r.serial}_${r.ip}`;
+                        return (
+                          <SelectItem key={uniqueId} value={uniqueId}>
+                            {r.human_name} ({r.ip}) {r.is_claimed ? `[Claimed by ${r.claimed_by_ip}]` : ''}
+                          </SelectItem>
+                        );
+                      })}
+                    </SelectContent>
+                  </Select>
+                  <Button
+                    size="sm"
+                    variant="default"
+                    className="h-8 px-2"
+                    disabled={
+                      !selectedRobotSerial || 
+                      discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial)?.is_claimed
+                    }
+                    onClick={() => {
+                      const robot = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
+                      if (robot && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                        setConnectedRobot(robot);
+                        wsRef.current.send(JSON.stringify({ 
+                          type: "claim_robot", 
+                          ip: robot.ip, 
+                          port: robot.port 
+                        }));
+                      }
+                    }}
+                    title="Claim Selected Robot"
+                  >
+                    Claim
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 px-2"
+                    disabled={!connectedRobot}
+                    onClick={() => {
+                      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                        setConnectedRobot(null);
+                        wsRef.current.send(JSON.stringify({ type: "release_robot" }));
+                      }
+                    }}
+                    title="Release Claimed Robot"
+                  >
+                    Unclaim
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-8 px-2"
+                    disabled={isScanning}
+                    onClick={() => {
+                      setIsScanning(true);
+                      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                        wsRef.current.send(JSON.stringify({ type: "scan_robots" }));
+                      }
+                    }}
+                    title="Scan for Robots"
+                  >
+                    <Search className={`w-4 h-4 ${isScanning ? 'animate-spin' : ''}`} />
+                  </Button>
+                </div>
             </div>
         )}
 
@@ -758,19 +1031,34 @@ export default function Home() {
 
         {/* Workspace Bodies */}
         <div className="flex-1 min-h-0 overflow-hidden relative bg-muted/5">
-            {activeWorkspace === "code" && (
+            <div className={activeWorkspace === "code" ? "h-full" : "hidden h-full"}>
                 <ResizablePanelGroup orientation="vertical" className="h-full">
                   <ResizablePanel defaultSize={70} minSize={20} className="flex flex-col overflow-hidden border-b">
-                    <div className="flex-1 min-h-0 overflow-hidden relative">
-                      <Editor
-                        height="100%"
-                        defaultLanguage="python"
-                        value={code}
-                        onChange={(val) => setCode(enforceLockedFunctionSignature(val || lockedFunctionSignature))}
-                        onMount={handleEditorMount}
-                        options={{ fontFamily: '"Hack", monospace', minimap: { enabled: false }, roundedSelection: false, scrollBeyondLastLine: false }}
-                      />
-                    </div>
+                    <ResizablePanelGroup orientation="horizontal" className="h-full">
+                      <ResizablePanel defaultSize={74} minSize={45} className="flex flex-col overflow-hidden border-r">
+                        <div className="flex-1 min-h-0 overflow-hidden relative">
+                          <Editor
+                            height="100%"
+                            defaultLanguage="python"
+                            defaultValue={code}
+                            onMount={handleEditorMount}
+                            options={{ fontFamily: '"Hack", monospace', minimap: { enabled: false }, roundedSelection: false, scrollBeyondLastLine: false }}
+                          />
+                        </div>
+                      </ResizablePanel>
+                      <ResizableHandle withHandle className="w-1 bg-border cursor-col-resize hover:bg-primary/50 transition-colors" />
+                      <ResizablePanel defaultSize={26} minSize={18} className="bg-background overflow-hidden">
+                        <div className="h-full flex flex-col">
+                          <div className="h-8 border-b px-3 flex items-center justify-between shrink-0">
+                            <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">Script Paths</span>
+                            <span className="text-[10px] text-muted-foreground">RobotState and RobotControl</span>
+                          </div>
+                          <div className="flex-1 min-h-0 overflow-y-auto p-2">
+                            {renderScriptTree(scriptSchema)}
+                          </div>
+                        </div>
+                      </ResizablePanel>
+                    </ResizablePanelGroup>
                   </ResizablePanel>
                   <ResizableHandle withHandle className="h-1 bg-border cursor-row-resize hover:bg-muted-foreground/30 transition-colors" />
                   <ResizablePanel defaultSize={30} minSize={15} className="flex flex-col bg-background">
@@ -791,7 +1079,7 @@ export default function Home() {
                     </Tabs>
                   </ResizablePanel>
                 </ResizablePanelGroup>
-            )}
+              </div>
 
             {activeWorkspace === "scope" && (
                 <ResizablePanelGroup orientation="horizontal" className="h-full">
@@ -839,6 +1127,23 @@ export default function Home() {
                                 onChange={(e) => setRobotIp(e.target.value)} 
                                 className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
                                 placeholder="localhost"
+                            />
+                        </div>
+                        <div className="flex flex-col gap-1">
+                            <span className="text-xs font-semibold">Scripts Folder Path</span>
+                            <input
+                                type="text"
+                                value={scriptsPath}
+                                onChange={(e) => setScriptsPath(e.target.value)}
+                                onBlur={() => sendScriptsPath(scriptsPath)}
+                                onKeyDown={(e) => {
+                                  if (e.key === "Enter") {
+                                    e.preventDefault();
+                                    sendScriptsPath(scriptsPath);
+                                  }
+                                }}
+                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                                placeholder="backend/scripts"
                             />
                         </div>
                         <div className="grid grid-cols-2 gap-4">
