@@ -421,7 +421,12 @@ export default function Home() {
 
   const copyPath = async (path: string) => {
     try {
-      await navigator.clipboard.writeText(path);
+      if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
+        const { writeText } = await import('@tauri-apps/plugin-clipboard-manager');
+        await writeText(path);
+      } else {
+        await navigator.clipboard.writeText(path);
+      }
       setCopiedPath(path);
       setTimeout(() => setCopiedPath((prev) => (prev === path ? null : prev)), 1000);
     } catch {
