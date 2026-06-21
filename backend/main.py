@@ -3,6 +3,7 @@ import contextlib
 import io
 import inspect
 from pathlib import Path
+import os
 import socket
 import traceback
 import json
@@ -27,7 +28,7 @@ UDP_CONTROL_PORT = 30010
 UDP_TARGET_IP = '172.20.10.2'
 udp_target_ip = UDP_TARGET_IP
 
-DEFAULT_SCRIPTS_DIR = Path(__file__).resolve().parent / 'scripts'
+DEFAULT_SCRIPTS_DIR = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')) / 'kabot-hmi' / 'scripts'
 scripts_dir = DEFAULT_SCRIPTS_DIR
 
 current_user_code = None
@@ -182,6 +183,11 @@ def encode_control(ctrl: RobotControl) -> bytes:
     return msg.SerializeToString()
 
 sock_recv = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+sock_recv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+try:
+    sock_recv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+except AttributeError:
+    pass
 sock_recv.bind(('0.0.0.0', UDP_STATE_PORT))
 sock_recv.setblocking(False)
 
@@ -517,4 +523,6 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == '__main__':
     import uvicorn
-    uvicorn.run(app, host='0.0.0.0', port=8000)
+    import os
+    port = int(os.environ.get('KABOT_BACKEND_PORT', 8000))
+    uvicorn.run(app, host='0.0.0.0', port=port)

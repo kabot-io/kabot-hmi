@@ -30,3 +30,14 @@ yarn-error.log*
 # OS/editor
 .DS_Store
 .vscode/
+# PyInstaller
+backend/build/
+backend/dist/
+backend/*.spec
+backend/venv/
+
+# AppImage
+*.AppImage
+
+frontend/src-tauri/target/
+frontend/src-tauri/binaries/kabot_backend-*

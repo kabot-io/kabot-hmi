@@ -96,7 +96,20 @@ export default function Home() {
   const [scriptPickerValue, setScriptPickerValue] = useState<string>(NEW_SCRIPT_OPTION);
   
   const [robotIp, setRobotIp] = useState("localhost");
+  const [backendPort, setBackendPort] = useState<number>(8000);
   const [controlTargetIp, setControlTargetIp] = useState("172.20.10.2");
+
+  useEffect(() => {
+    if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
+      import("@tauri-apps/api/core").then((module) => {
+        module.invoke("get_backend_port").then((port) => {
+          if (typeof port === "number") {
+            setBackendPort(port);
+          }
+        }).catch(console.error);
+      });
+    }
+  }, []);
   const [connectedRobot, setConnectedRobot] = useState<any>(null);
   const [discoveredRobots, setDiscoveredRobots] = useState<any[]>([]);
   const [selectedRobotSerial, setSelectedRobotSerial] = useState<string>("");
@@ -172,7 +185,7 @@ export default function Home() {
   }, [triggerSourceKey]);
 
   useEffect(() => {
-    wsRef.current = new WebSocket(`ws://${robotIp}:8000/ws`);
+    wsRef.current = new WebSocket(`ws://${robotIp}:${backendPort}/ws`);
     wsRef.current.onopen = () => {
       sendControlTargetIp(controlTargetIp);
       sendScriptsPath(scriptsPath);
@@ -335,11 +348,25 @@ export default function Home() {
       } catch(e) {}
     };
     return () => wsRef.current?.close();
-  }, [robotIp]);
+  }, [robotIp, backendPort]);
 
-  const handleEditorMount = (editor: any) => {
+  const handleEditorMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
     editor.setValue(code);
+
+    if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
+      editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyV, async () => {
+        try {
+          const { readText } = await import('@tauri-apps/plugin-clipboard-manager');
+          const text = await readText();
+          if (text) {
+            editor.trigger('keyboard', 'type', { text });
+          }
+        } catch (e) {
+          console.error("Failed to paste from Tauri clipboard", e);
+        }
+      });
+    }
   };
 
   const sendManualControl = (x: number, y: number) => {
@@ -755,6 +782,7 @@ export default function Home() {
                 <Select
                   value={scriptPickerValue}
                   onValueChange={(value) => {
+                    if (!value) return;
                     if (value === NEW_SCRIPT_OPTION) {
                       startNewScript();
                       return;
@@ -776,7 +804,7 @@ export default function Home() {
                 <div className="flex items-center gap-2">
                   <Select 
                     value={selectedRobotSerial} 
-                    onValueChange={(val) => setSelectedRobotSerial(val)}
+                    onValueChange={(val) => setSelectedRobotSerial(val || "")}
                   >
                     <SelectTrigger className="w-64 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
                       <SelectValue placeholder="Select Robot" />
