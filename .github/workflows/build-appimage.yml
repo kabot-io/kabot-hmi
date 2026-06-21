@@ -46,6 +46,8 @@ jobs:
         run: rustup target add x86_64-unknown-linux-gnu
 
       - name: Run Build Script
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           chmod +x ./build_appimage.sh
           ./build_appimage.sh
