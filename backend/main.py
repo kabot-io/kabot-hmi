@@ -71,18 +71,30 @@ def _normalize_control(result_ctrl: object) -> RobotControl:
     return RobotControl(effort=Vector2(float(x), float(y)))
 
 
+ws_lock = None
+
+async def get_ws_lock():
+    global ws_lock
+    if ws_lock is None:
+        ws_lock = asyncio.Lock()
+    return ws_lock
+
 async def _send_json(conn: WebSocket, payload: dict):
-    await conn.send_text(json.dumps(payload))
+    lock = await get_ws_lock()
+    async with lock:
+        await conn.send_text(json.dumps(payload))
 
 
 async def _broadcast_json(payload: dict):
     stale = []
     data = json.dumps(payload)
-    for conn in active_connections:
-        try:
-            await conn.send_text(data)
-        except Exception:
-            stale.append(conn)
+    lock = await get_ws_lock()
+    async with lock:
+        for conn in active_connections:
+            try:
+                await conn.send_text(data)
+            except Exception:
+                stale.append(conn)
     for conn in stale:
         if conn in active_connections:
             active_connections.remove(conn)
@@ -256,48 +268,43 @@ async def perform_discovery_sweep():
             except Exception:
                 continue
 
-    for sweep_idx in range(3):
-        # Multicast / Broadcast scan (new)
-        try:
-            sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-            sock_discover.sendto(req_data, ("255.255.255.255", 30012))
-        except Exception:
-            pass
-            
-        for network in subnets:
-            if network.network_address.is_loopback:
-                try:
-                    sock_discover.sendto(req_data, ("127.0.0.1", 30012))
-                except Exception:
-                    pass
-            else:
-                try:
-                    sock_discover.sendto(req_data, (str(network.broadcast_address), 30012))
-                except Exception:
-                    pass
+    last_sweep_time = getattr(perform_discovery_sweep, 'last_sweep_time', 0)
+    current_time = asyncio.get_event_loop().time()
+    if current_time - last_sweep_time < 5.0:
+        await _broadcast_json({'type': 'log', 'data': 'Discovery sweep throttled (too soon).'})
+        await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+        return
+    perform_discovery_sweep.last_sweep_time = current_time
 
-        # Singleshot udp scan (current)
-        for network in subnets:
-            if network.network_address.is_loopback:
-                continue
-                
-            if sweep_idx == 0 and network.num_addresses > 65536:
-                await _broadcast_json({'type': 'log', 'data': f'Sweeping large network {network}...'})
-            count = 0
-            
-            hosts = network.hosts() if network.prefixlen < 32 else [network.network_address]
-                
-            for ip in hosts:
+    await _broadcast_json({'type': 'log', 'data': 'Starting fast broadcast discovery sweep...'})
+    
+    # Broadcast scan
+    sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    try:
+        sock_discover.sendto(req_data, ('255.255.255.255', 30012))
+    except Exception:
+        pass
+        
+    await asyncio.sleep(0.5)
+    drain_socket()
+    
+    if discovered_robots:
+        await _broadcast_json({'type': 'log', 'data': f"Broadcast sweep finished. Found {len(discovered_robots)} robots."})
+        await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+        sock_discover.close()
+        return
+
+    # If no robots found by broadcast, proceed with full sweep
+    await _broadcast_json({'type': 'log', 'data': 'No robots found via broadcast. Proceeding with full subnet sweep...'})
+    for sweep_idx in range(1):
+        for subnet in subnets:
+            for ip in subnet.hosts():
                 try:
                     sock_discover.sendto(req_data, (str(ip), 30012))
+                    await asyncio.sleep(0.001)  # tiny delay to not hog CPU/buffer
                 except Exception:
                     pass
-                count += 1
-                if count % 1000 == 0:
-                    await asyncio.sleep(0) # yield control
-                    
-        await asyncio.sleep(0.2)
-        drain_socket()
+            drain_socket()
                 
     await _broadcast_json({'type': 'log', 'data': 'Sweep packets sent. Waiting for late responses...'})
     await asyncio.sleep(0.8)
@@ -372,7 +379,6 @@ async def udp_loop():
             await asyncio.sleep(0.01)
         except Exception as e:
             print(f"udp_loop exception: {e}")
-            import traceback
             traceback.print_exc()
             await asyncio.sleep(0.01)
 
@@ -456,11 +462,10 @@ async def websocket_endpoint(websocket: WebSocket):
                 try:
                     user_callable = _build_user_callable(code)
                     current_user_code = code
-                    current_user_callable = user_callable
                     await _send_json(websocket, {'type': 'run_result', 'ok': True, 'message': 'Running.'})
                     await _set_runtime_active(True)
+                    current_user_callable = user_callable
                 except Exception as e:
-                    import traceback
                     err_text = traceback.format_exc()
                     current_user_code = None
                     current_user_callable = None

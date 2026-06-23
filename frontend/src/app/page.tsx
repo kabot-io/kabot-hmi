@@ -1204,6 +1204,9 @@ export default function Home() {
                             }}
                             onChange={(value) => {
                               if (value !== undefined) setCode(value);
+                              if (editorRef.current && monacoRef.current && decorationsRef.current.length > 0) {
+                                decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
+                              }
                             }}
                             onMount={handleEditorMount}
                           />
