@@ -616,6 +616,7 @@ export default function Home() {
       return;
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setLogs([]);
       wsRef.current.send(JSON.stringify({ type: "run", code: runtimeCode }));
     }
   };

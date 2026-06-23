@@ -455,7 +455,13 @@ async def websocket_endpoint(websocket: WebSocket):
                     await _send_json(websocket, {'type': 'run_result', 'ok': True, 'message': 'Running.'})
                     await _set_runtime_active(True)
                 except Exception as e:
+                    import traceback
+                    err_text = traceback.format_exc()
+                    current_user_code = None
+                    current_user_callable = None
+                    await _broadcast_json({'type': 'log', 'data': f"Error parsing script:\n{err_text}"})
                     await _send_json(websocket, {'type': 'run_result', 'ok': False, 'message': f'Run error: {e}'})
+                    await _set_runtime_active(False)
                     
             elif msg.get('type') == 'stop':
                 current_user_code = None
