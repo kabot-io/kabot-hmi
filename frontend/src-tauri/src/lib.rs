@@ -3,6 +3,7 @@ use tauri_plugin_shell::process::CommandEvent;
 use tauri::Manager;
 
 struct BackendPort(u16);
+struct BackendProcess(std::sync::Mutex<Option<tauri_plugin_shell::process::CommandChild>>);
 
 #[tauri::command]
 fn get_backend_port(port: tauri::State<'_, BackendPort>) -> u16 {
@@ -11,7 +12,7 @@ fn get_backend_port(port: tauri::State<'_, BackendPort>) -> u16 {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let app = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_dialog::init())
@@ -40,16 +41,7 @@ pub fn run() {
             let (mut rx, child) = sidecar_command
                 .spawn()
                 .expect("Failed to spawn sidecar");
-
-            struct BackendProcess(Option<tauri_plugin_shell::process::CommandChild>);
-            impl Drop for BackendProcess {
-                fn drop(&mut self) {
-                    if let Some(child) = self.0.take() {
-                        let _ = child.kill();
-                    }
-                }
-            }
-            app.manage(BackendProcess(Some(child)));
+            app.manage(BackendProcess(std::sync::Mutex::new(Some(child))));
 
             tauri::async_runtime::spawn(async move {
                 while let Some(event) = rx.recv().await {
@@ -63,6 +55,18 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .build(tauri::generate_context!())
+        .expect("error while building tauri application");
+
+    app.run(|app_handle, event| {
+        if let tauri::RunEvent::Exit = event {
+            if let Some(state) = app_handle.try_state::<BackendProcess>() {
+                if let Ok(mut child_opt) = state.0.lock() {
+                    if let Some(child) = child_opt.take() {
+                        let _ = child.kill();
+                    }
+                }
+            }
+        }
+    });
 }
