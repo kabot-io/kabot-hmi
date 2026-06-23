@@ -107,6 +107,8 @@ export default function Home() {
   const plotContainerRef = useRef<HTMLDivElement>(null);
   const codeLogsEndRef = useRef<HTMLDivElement>(null);
   const firmwareLogsEndRef = useRef<HTMLDivElement>(null);
+  const monacoRef = useRef<any>(null);
+  const decorationsRef = useRef<any>([]);
 
   useEffect(() => {
     if (activeWorkspace === "code") {
@@ -250,8 +252,45 @@ export default function Home() {
         const msg = JSON.parse(event.data);
         if (msg.type === "log") {
           setLogs(prev => [...prev.slice(-10000), msg.data]);
-          if (msg.data.includes("Runtime Error:") || msg.data.includes("Stopped user script.")) setIsRunning(false);
+          if (msg.data.includes("Runtime Error:") || msg.data.includes("Stopped user script.") || msg.data.includes("Error parsing script:")) setIsRunning(false);
           if (msg.data.includes("Discovery sweep finished. No robots found.")) setIsScanning(false);
+          
+          if (msg.data.includes("Traceback") || msg.data.includes("Error parsing script:")) {
+            const lines = msg.data.split("\n").filter((l: string) => l.trim().length > 0);
+            let errLineNum = -1;
+            let errMsg = lines[lines.length - 1]?.trim() || "Error";
+            for (let i = lines.length - 1; i >= 0; i--) {
+              const match = lines[i].match(/File "<user_code>", line (\d+)/);
+              if (match) {
+                errLineNum = parseInt(match[1], 10);
+                break;
+              }
+            }
+            if (errLineNum > 0 && editorRef.current && monacoRef.current) {
+              const m = monacoRef.current;
+              const model = editorRef.current.getModel();
+              const maxCol = model ? model.getLineMaxColumn(errLineNum) : 1;
+              decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, [
+                {
+                  range: new m.Range(errLineNum, 1, errLineNum, 1),
+                  options: {
+                    isWholeLine: true,
+                    className: 'error-line-highlight'
+                  }
+                },
+                {
+                  range: new m.Range(errLineNum, 1, errLineNum, maxCol),
+                  options: {
+                    inlineClassName: 'error-squiggle',
+                    after: {
+                      content: `    ${errMsg}`,
+                      inlineClassName: 'error-inline-text text-red-500'
+                    }
+                  }
+                }
+              ]);
+            }
+          }
         } else if (msg.type === "robots_discovered") {
           setIsScanning(false);
           setDiscoveredRobots(msg.robots);
@@ -434,6 +473,7 @@ export default function Home() {
 
   const handleEditorMount = (editor: any, monaco: any) => {
     editorRef.current = editor;
+    monacoRef.current = monaco;
     editor.setValue(code);
 
     if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
@@ -617,6 +657,9 @@ export default function Home() {
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       setLogs([]);
+      if (editorRef.current && monacoRef.current) {
+        decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
+      }
       wsRef.current.send(JSON.stringify({ type: "run", code: runtimeCode }));
     }
   };
@@ -840,7 +883,7 @@ export default function Home() {
         {activeWorkspace === "code" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
                 {!isRunning ? (
-                  <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
+                  <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning || robotConnectionStatus !== 'connected'} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
                 ) : (
                   <Button size="sm" variant="destructive" className="font-bold animate-pulse w-[140px]" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop ({hzStats['state'] || '0.0'} Hz)</Button>
                 )}
@@ -1114,13 +1157,22 @@ export default function Home() {
                   <ResizablePanel defaultSize={70} minSize={20} className="flex flex-col overflow-hidden border-b">
                     <ResizablePanelGroup orientation="horizontal" className="h-full">
                       <ResizablePanel defaultSize={74} minSize={45} className="flex flex-col overflow-hidden border-r">
-                        <div className="flex-1 min-h-0 overflow-hidden relative">
+                        <div className={`flex-1 min-h-0 overflow-hidden relative ${isRunning ? 'opacity-50 pointer-events-none animate-pulse' : ''}`}>
                           <Editor
                             height="100%"
                             defaultLanguage="python"
-                            defaultValue={code}
+                            value={code}
+                            options={{
+                              minimap: { enabled: false },
+                              fontSize: 14,
+                              fontFamily: 'Hack, monospace',
+                              padding: { top: 16, bottom: 16 },
+                              readOnly: isRunning
+                            }}
+                            onChange={(value) => {
+                              if (value !== undefined) setCode(value);
+                            }}
                             onMount={handleEditorMount}
-                            options={{ fontFamily: '"Hack", monospace', minimap: { enabled: false }, roundedSelection: false, scrollBeyondLastLine: false }}
                           />
                         </div>
                       </ResizablePanel>
@@ -1148,7 +1200,7 @@ export default function Home() {
                         </div>
                         <TabsContent value="shell" className="flex-1 overflow-y-auto p-2 m-0 data-[state=inactive]:hidden font-mono text-xs text-foreground">
                             {logs.length === 0 && <span className="text-muted-foreground">Awaiting logs...</span>}
-                            {logs.map((log, i) => <div key={i}>{log}</div>)}
+                            {logs.map((log, i) => <div key={i} className="whitespace-pre-wrap font-mono text-xs mb-2 pb-2 border-b border-border/50 last:border-0">{log}</div>)}
                             <div ref={codeLogsEndRef} />
                         </TabsContent>
                     </Tabs>

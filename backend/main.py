@@ -413,6 +413,11 @@ async def continuous_ping():
                 udp_target_ip = None
                 fail_count = 0
                 last_ping_status = 'disconnected'
+                global current_user_callable
+                if current_user_callable:
+                    current_user_callable = None
+                    await _set_runtime_active(False)
+                    await _broadcast_json({'type': 'log', 'data': 'Robot disconnected. Stopped user script.'})
             elif last_ping_status != 'warning':
                 await _broadcast_json({'type': 'robot_connection_status', 'status': 'warning'})
                 last_ping_status = 'warning'
