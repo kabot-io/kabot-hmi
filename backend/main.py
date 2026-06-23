@@ -317,6 +317,9 @@ async def udp_loop():
     while True:
         try:
             data, addr = sock_recv.recvfrom(2048)
+            if not udp_target_ip or addr[0] != udp_target_ip:
+                continue
+                
             state = decode_state(data)
             
             state_dict = {
