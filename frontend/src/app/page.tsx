@@ -45,7 +45,7 @@ const scriptSchema = {
 
 export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
-  const [verifyLogs, setVerifyLogs] = useState<string[]>([]);
+  const [activeWorkspace, setActiveWorkspace] = useState("firmware");
   const [stateData, setStateData] = useState<any>({});
   const [pausedState, setPausedState] = useState<any>(null);
   
@@ -53,7 +53,27 @@ export default function Home() {
   const [hzStats, setHzStats] = useState<Record<string, string>>({});
   
   const [channels, setChannels] = useState<ScopeState>({});
-  const channelsRef = useRef<ScopeState>({});
+  const channelsRef = useRef<ScopeState>(channels);
+
+  // Load saved layout strictly after mount to avoid SSR hydration mismatch
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const saved = localStorage.getItem("plot_layout");
+      if (saved) {
+        try {
+          const parsed = JSON.parse(saved);
+          setChannels(parsed);
+          channelsRef.current = parsed;
+        } catch (e) {}
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    if (Object.keys(channels).length > 0) {
+      localStorage.setItem("plot_layout", JSON.stringify(channels));
+    }
+  }, [channels]);
   
   const [triggerSourceKey, setTriggerSourceKey] = useState<string | null>(null);
   const triggerSourceKeyRef = useRef<string | null>(null);
@@ -85,16 +105,23 @@ export default function Home() {
   const wsRef = useRef<WebSocket | null>(null);
   const editorRef = useRef<any>(null);
   const plotContainerRef = useRef<HTMLDivElement>(null);
-  
-  const [activeWorkspace, setActiveWorkspace] = useState<"code" | "scope" | "firmware">("code");
+  const codeLogsEndRef = useRef<HTMLDivElement>(null);
+  const firmwareLogsEndRef = useRef<HTMLDivElement>(null);
 
+  useEffect(() => {
+    if (activeWorkspace === "code") {
+      codeLogsEndRef.current?.scrollIntoView();
+    } else if (activeWorkspace === "firmware") {
+      firmwareLogsEndRef.current?.scrollIntoView();
+    }
+  }, [logs, activeWorkspace]);
+  
   const defaultCode = `${lockedFunctionSignature}\n    if state.distance < 0.5:\n        control.effort.x = 0\n        control.effort.y = 0\n    else:\n        control.effort.x = 1\n        control.effort.y = 1\n    return control\n`;
   const [code, setCode] = useState(defaultCode);
   const [scriptName, setScriptName] = useState("control.py");
   
   const [robotIp, setRobotIp] = useState("localhost");
   const [backendPort, setBackendPort] = useState<number>(8000);
-  const [controlTargetIp, setControlTargetIp] = useState("172.20.10.2");
 
   useEffect(() => {
     if (typeof window !== "undefined" && (window as any).__TAURI_INTERNALS__) {
@@ -111,6 +138,8 @@ export default function Home() {
   const [discoveredRobots, setDiscoveredRobots] = useState<any[]>([]);
   const [selectedRobotSerial, setSelectedRobotSerial] = useState<string>("");
   const [isScanning, setIsScanning] = useState(false);
+  const [backendConnected, setBackendConnected] = useState(false);
+  const [robotConnectionStatus, setRobotConnectionStatus] = useState<'connected' | 'warning' | 'disconnected'>('disconnected');
   const [scriptsPath, setScriptsPath] = useState("backend/scripts");
   const manualDirectionsRef = useRef<Set<ControlDirection>>(new Set());
   const [manualDirectionsUI, setManualDirectionsUI] = useState<Set<ControlDirection>>(new Set());
@@ -128,14 +157,6 @@ export default function Home() {
     setCode(nextCode);
     if (editorRef.current) {
       editorRef.current.setValue(nextCode);
-    }
-  };
-
-  const sendControlTargetIp = (ip: string) => {
-    const normalized = ip.trim();
-    if (!normalized) return;
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "set_control_target_ip", ip: normalized }));
     }
   };
 
@@ -214,9 +235,10 @@ export default function Home() {
       if (!isComponentMounted) return;
       wsRef.current = new WebSocket(`ws://${robotIp}:${backendPort}/ws`);
       wsRef.current.onopen = () => {
-        sendControlTargetIp(controlTargetIp);
+        setBackendConnected(true);
       };
       wsRef.current.onclose = () => {
+        setBackendConnected(false);
         setIsRunning(false);
         setIsScanning(false);
         if (isComponentMounted) {
@@ -227,23 +249,41 @@ export default function Home() {
       try {
         const msg = JSON.parse(event.data);
         if (msg.type === "log") {
-          setLogs(prev => [...prev.slice(-40), msg.data]);
+          setLogs(prev => [...prev.slice(-10000), msg.data]);
           if (msg.data.includes("Runtime Error:") || msg.data.includes("Stopped user script.")) setIsRunning(false);
           if (msg.data.includes("Discovery sweep finished. No robots found.")) setIsScanning(false);
         } else if (msg.type === "robots_discovered") {
-          setDiscoveredRobots(msg.robots || []);
           setIsScanning(false);
-        } else if (msg.type === "validation_result") {
-          if (msg.ok) {
-            setVerifyLogs([msg.message || "Validation successful."]);
-          } else {
-            setVerifyLogs([msg.message || "Validation failed."]);
+          setDiscoveredRobots(msg.robots);
+          
+          const alreadyClaimedByUs = msg.robots.find((r: any) => r.is_claimed_by_us);
+          if (alreadyClaimedByUs && !connectedRobot) {
+            setConnectedRobot(alreadyClaimedByUs);
+            setRobotConnectionStatus('connected');
+            setSelectedRobotSerial(`${alreadyClaimedByUs.serial}_${alreadyClaimedByUs.ip}`);
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                wsRef.current.send(JSON.stringify({ 
+                    type: 'claim_robot', 
+                    ip: alreadyClaimedByUs.ip, 
+                    port: alreadyClaimedByUs.port 
+                }));
+                wsRef.current.send(JSON.stringify({ 
+                    type: 'request_current_script'
+                }));
+            }
+          } else if (msg.robots.length === 0) {
+            setSelectedRobotSerial("");
+          } else if (msg.robots.length === 1 && !selectedRobotSerial) {
+            setSelectedRobotSerial(`${msg.robots[0].serial}_${msg.robots[0].ip}`);
           }
+        } else if (msg.type === "claim_accepted") {
+          setDiscoveredRobots(prev => prev.map(r => 
+            r.ip === msg.ip ? { ...r, is_claimed: true } : r
+          ));
         } else if (msg.type === "run_result") {
           if (msg.ok) {
-            setVerifyLogs(["Validation successful.", msg.message || "Running."]);
+            setIsRunning(true);
           } else {
-            setVerifyLogs([msg.message || "Run failed."]);
             setIsRunning(false);
           }
         } else if (msg.type === "runtime_status") {
@@ -263,12 +303,21 @@ export default function Home() {
           if (typeof msg.code === "string") {
             setEditorCode(msg.code);
           }
-          setVerifyLogs([`Loaded ${msg.name || "script"}.`]);
         } else if (msg.type === "robot_connected") {
           setConnectedRobot(msg.robot);
+          setRobotConnectionStatus('connected');
           setIsScanning(false);
+        } else if (msg.type === "robot_connection_status") {
+          setRobotConnectionStatus(msg.status);
+        } else if (msg.type === "robot_disconnected") {
+          setConnectedRobot(null);
+          setRobotConnectionStatus('disconnected');
         } else if (msg.type === "robot_released") {
           setConnectedRobot(null);
+          setRobotConnectionStatus('disconnected');
+          setDiscoveredRobots(prev => prev.map(r => 
+            (msg.ip ? r.ip === msg.ip : true) ? { ...r, is_claimed: false, is_claimed_by_us: false } : r
+          ));
         } else if (msg.type === "state") {
           const d = msg.data;
           const s = msg.stamps || {};
@@ -284,8 +333,8 @@ export default function Home() {
                   if (history.length > 5) history.shift();
               }
               if (history.length >= 2) {
-                  const deltaNs = history[history.length - 1] - history[0];
-                  if (deltaNs > 0) newHz[key] = ((history.length - 1) * 1e9 / deltaNs).toFixed(1);
+                  const deltaMs = history[history.length - 1] - history[0];
+                  if (deltaMs > 0) newHz[key] = ((history.length - 1) * 1e3 / deltaMs).toFixed(1);
                   else newHz[key] = "0.0";
               } else newHz[key] = "0.0";
           }
@@ -317,7 +366,7 @@ export default function Home() {
                   nextChannels[k] = {
                       key: k,
                       color: chartColors[Object.keys(nextChannels).length % chartColors.length],
-                      visible: k.startsWith('mag.'), // Default some to visible
+                      visible: k.startsWith('effort.') || k === 'distance' || k.startsWith('gyro.'),
                       focused: k === 'mag.x',
                       y_offset: 0,
                       y_scale: 2,
@@ -399,8 +448,8 @@ export default function Home() {
     }
   };
 
-  const sendManualControl = (x: number, y: number) => {
-    if (lastManualControlRef.current.x === x && lastManualControlRef.current.y === y) {
+  const sendManualControl = (x: number, y: number, force = false) => {
+    if (!force && lastManualControlRef.current.x === x && lastManualControlRef.current.y === y) {
       return;
     }
     lastManualControlRef.current = { x, y };
@@ -428,14 +477,23 @@ export default function Home() {
     };
   };
 
-  const updateManualDirections = (mutator: (next: Set<ControlDirection>) => void) => {
+  const updateManualDirections = (updater: (next: Set<ControlDirection>) => void) => {
     const next = new Set(manualDirectionsRef.current);
-    mutator(next);
+    updater(next);
     manualDirectionsRef.current = next;
     setManualDirectionsUI(next);
     const vector = computeManualVector(next);
     sendManualControl(vector.x, vector.y);
   };
+
+  useEffect(() => {
+    if (manualDirectionsUI.size === 0) return;
+    const intervalId = setInterval(() => {
+      const vector = computeManualVector(manualDirectionsUI);
+      sendManualControl(vector.x, vector.y, true);
+    }, 100);
+    return () => clearInterval(intervalId);
+  }, [manualDirectionsUI]);
 
   const handleManualDirectionPress = (direction: ControlDirection) => {
     updateManualDirections((next) => next.add(direction));
@@ -459,8 +517,8 @@ export default function Home() {
       }
       setCopiedPath(path);
       setTimeout(() => setCopiedPath((prev) => (prev === path ? null : prev)), 1000);
-    } catch {
-      setVerifyLogs([`Copy failed for path: ${path}`]);
+    } catch (err) {
+      console.error(err);
     }
   };
 
@@ -548,22 +606,13 @@ export default function Home() {
     }
   }, [activeWorkspace]);
 
-  const handleValidate = () => {
-    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      wsRef.current.send(JSON.stringify({ type: "validate", code: getEditorCode() }));
-      setVerifyLogs(["Running validation..."]);
-    }
-  };
-
   const handleRun = () => {
     const runtimeCode = getEditorCode();
     const body = runtimeCode.split("\n").slice(1).join("\n").trim();
     if (!body) {
-      setVerifyLogs(["Run blocked: function body is empty."]);
       return;
     }
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      setVerifyLogs(["Validating and activating..."]);
       wsRef.current.send(JSON.stringify({ type: "run", code: runtimeCode }));
     }
   };
@@ -772,15 +821,13 @@ export default function Home() {
             <Activity className="w-5 h-5" />
         </Button>
         <div className="flex-1" />
-        <Button 
-           variant={activeWorkspace === "firmware" ? "secondary" : "ghost"} 
-           size="icon" 
-           onClick={() => setActiveWorkspace("firmware")}
-           className={activeWorkspace === "firmware" ? "text-primary" : "text-muted-foreground hover:text-foreground"}
-           title="Settings & Firmware"
-        >
+          <button 
+            onClick={() => setActiveWorkspace("firmware")} 
+            className={`p-2 rounded-lg transition-colors ${activeWorkspace === "firmware" ? "bg-accent text-accent-foreground" : "text-muted-foreground hover:bg-accent hover:text-accent-foreground"}`}
+            title="Settings"
+          >
             <Settings className="w-5 h-5" />
-        </Button>
+          </button>
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
@@ -788,11 +835,10 @@ export default function Home() {
         {/* Contextual Toolbar */}
         {activeWorkspace === "code" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
-                <Button size="sm" variant="outline" className="text-foreground hover:bg-muted font-bold" onClick={handleValidate} title="Verify"><Check className="w-4 h-4 mr-2" /> Verify</Button>
                 {!isRunning ? (
-                  <Button size="sm" variant="default" className="font-bold" onClick={handleRun} title="Run on Robot"><Play className="w-4 h-4 mr-2" /> Run</Button>
+                  <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
                 ) : (
-                  <Button size="sm" variant="destructive" className="font-bold" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop</Button>
+                  <Button size="sm" variant="destructive" className="font-bold animate-pulse w-[140px]" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop ({hzStats['state'] || '0.0'} Hz)</Button>
                 )}
                 <div className="w-px h-6 bg-border mx-2" />
                 <Input
@@ -827,15 +873,22 @@ export default function Home() {
                     value={selectedRobotSerial} 
                     onValueChange={(val) => setSelectedRobotSerial(val || "")}
                   >
-                    <SelectTrigger className="w-64 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
-                      <SelectValue placeholder="Select Robot" />
+                    <SelectTrigger className="w-80 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
+                      <SelectValue placeholder="Select Robot">
+                        {(() => {
+                          const r = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
+                          if (r) return `${r.ip}${r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}`;
+                          if (selectedRobotSerial) return selectedRobotSerial.split('_')[1] || selectedRobotSerial;
+                          return "Select Robot";
+                        })()}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {discoveredRobots.map(r => {
                         const uniqueId = `${r.serial}_${r.ip}`;
                         return (
-                          <SelectItem key={uniqueId} value={uniqueId}>
-                            {r.human_name} ({r.ip}) {r.is_claimed ? `[Claimed by ${r.claimed_by_ip}]` : ''}
+                          <SelectItem key={uniqueId} value={uniqueId} className="text-xs">
+                            {r.ip}{r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}
                           </SelectItem>
                         );
                       })}
@@ -1036,20 +1089,6 @@ export default function Home() {
                             >
                               <ChevronDown className="w-2.5 h-2.5" />
                             </Button>
-                            <Input
-                              value={controlTargetIp}
-                              onChange={(e) => setControlTargetIp(e.target.value)}
-                              onBlur={() => sendControlTargetIp(controlTargetIp)}
-                              onKeyDown={(e) => {
-                                if (e.key === "Enter") {
-                                  e.preventDefault();
-                                  sendControlTargetIp(controlTargetIp);
-                                }
-                              }}
-                              className="h-5 w-24 text-[9px] font-mono px-1.5"
-                              placeholder="IP"
-                              title="UDP target IP for control messages"
-                            />
                         </div>
                     </div>
 
@@ -1059,22 +1098,8 @@ export default function Home() {
 
         {activeWorkspace === "firmware" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
-                <Button size="sm" variant="outline" className="font-bold"><Unplug className="w-4 h-4 mr-2" /> Connect Robot</Button>
-                <Dialog>
-                  <DialogTrigger render={<Button size="sm" variant="default" className="font-bold"><Download className="w-4 h-4 mr-2" /> Firmware Update</Button>} />
-                  <DialogContent className="sm:max-w-md">
-                    <DialogHeader>
-                      <DialogTitle>Update Firmware</DialogTitle>
-                      <DialogDescription>Select a firmware binary to flash to the connected robot.</DialogDescription>
-                    </DialogHeader>
-                    <div className="flex flex-col gap-4 py-4">
-                      <div className="flex items-center gap-4">
-                        <Input type="file" accept=".bin,.hex" className="text-xs" />
-                      </div>
-                      <Button className="w-full font-bold"><Upload className="w-4 h-4 mr-2" /> Flash Device</Button>
-                    </div>
-                  </DialogContent>
-                </Dialog>
+                <Button size="sm" variant="outline" className="font-bold" onClick={() => alert("This functionality will be available soon. Sorry.")}><Unplug className="w-4 h-4 mr-2" /> Connect Robot</Button>
+                <Button size="sm" variant="default" className="font-bold" onClick={() => alert("This functionality will be available soon. Sorry.")}><Download className="w-4 h-4 mr-2" /> Firmware Update</Button>
             </div>
         )}
 
@@ -1111,19 +1136,16 @@ export default function Home() {
                   </ResizablePanel>
                   <ResizableHandle withHandle className="h-1 bg-border cursor-row-resize hover:bg-muted-foreground/30 transition-colors" />
                   <ResizablePanel defaultSize={30} minSize={15} className="flex flex-col bg-background">
-                    <Tabs defaultValue="verification" className="flex-1 flex flex-col min-h-0 overflow-hidden">
+                    <Tabs defaultValue="shell" className="flex-1 flex flex-col min-h-0 overflow-hidden">
                         <div className="h-8 border-b flex items-center px-2 shrink-0 bg-muted/30">
                             <TabsList className="h-6 bg-transparent">
-                                <TabsTrigger value="verification" className="text-xs h-6 px-4 data-[state=active]:bg-background data-[state=active]:shadow-sm">Verification Status</TabsTrigger>
                                 <TabsTrigger value="shell" className="text-xs h-6 px-4 data-[state=active]:bg-background data-[state=active]:shadow-sm">Shell Output</TabsTrigger>
                             </TabsList>
                         </div>
-                        <TabsContent value="verification" className="flex-1 overflow-y-auto p-2 m-0 data-[state=inactive]:hidden font-mono text-xs text-muted-foreground">
-                            {verifyLogs.length === 0 ? "No verification run." : verifyLogs.map((l, i) => <div key={i}>{l}</div>)}
-                        </TabsContent>
                         <TabsContent value="shell" className="flex-1 overflow-y-auto p-2 m-0 data-[state=inactive]:hidden font-mono text-xs text-foreground">
                             {logs.length === 0 && <span className="text-muted-foreground">Awaiting logs...</span>}
                             {logs.map((log, i) => <div key={i}>{log}</div>)}
+                            <div ref={codeLogsEndRef} />
                         </TabsContent>
                     </Tabs>
                   </ResizablePanel>
@@ -1132,7 +1154,7 @@ export default function Home() {
 
             {activeWorkspace === "scope" && (
                 <ResizablePanelGroup orientation="horizontal" className="h-full">
-                  <ResizablePanel defaultSize={20} minSize={15} className="p-4 flex flex-col overflow-y-auto border-r bg-background">
+                  <ResizablePanel defaultSize={30} minSize={20} className="p-4 flex flex-col overflow-y-auto border-r bg-background">
                     <div className="flex items-center justify-between mb-4 shrink-0">
                        <div className="text-[10px] text-muted-foreground uppercase tracking-wider font-bold">Signal Browser</div>
                        {hoveredData && <div className="text-[8px] bg-yellow-500/20 text-yellow-600 px-1.5 py-0.5 rounded font-bold uppercase tracking-widest">Hover Time</div>}
@@ -1166,65 +1188,116 @@ export default function Home() {
             {activeWorkspace === "firmware" && (
                 <ResizablePanelGroup orientation="vertical" className="h-full">
                   <ResizablePanel defaultSize={60} minSize={20} className="flex flex-col bg-background border-b p-4">
-                     <h2 className="text-lg font-bold mb-4">Settings & Firmware Configurations</h2>
-                     <div className="flex flex-col gap-4 max-w-xl">
-                        <div className="flex flex-col gap-1">
-                            <span className="text-xs font-semibold">Robot IP Address</span>
-                            <input 
-                                type="text" 
-                                value={robotIp} 
-                                onChange={(e) => setRobotIp(e.target.value)} 
-                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                placeholder="localhost"
-                            />
-                        </div>
-                        <div className="flex flex-col gap-1">
-                            <span className="text-xs font-semibold">Scripts Folder Path</span>
-                            <input
-                                type="text"
-                                value={scriptsPath}
-                                onChange={(e) => setScriptsPath(e.target.value)}
-                                onBlur={() => sendScriptsPath(scriptsPath)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") {
-                                    e.preventDefault();
-                                    sendScriptsPath(scriptsPath);
-                                  }
-                                }}
-                                className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                placeholder="backend/scripts"
-                            />
-                        </div>
-                        <div className="grid grid-cols-2 gap-4">
-                            <div className="flex flex-col gap-1">
-                                <span className="text-xs font-semibold">Baud Rate</span>
-                                <Select defaultValue="115200">
-                                  <SelectTrigger><SelectValue/></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="9600">9600</SelectItem>
-                                    <SelectItem value="115200">115200</SelectItem>
-                                    <SelectItem value="921600">921600</SelectItem>
-                                  </SelectContent>
-                                </Select>
-                            </div>
-                            <div className="flex flex-col gap-1">
-                                <span className="text-xs font-semibold">Motor Type</span>
-                                <Select defaultValue="bldc">
-                                  <SelectTrigger><SelectValue/></SelectTrigger>
-                                  <SelectContent>
-                                    <SelectItem value="bldc">Brushless DC</SelectItem>
-                                    <SelectItem value="stepper">Stepper</SelectItem>
-                                  </SelectContent>
-                                </Select>
+                     <h2 className="text-xl font-bold mb-6">Settings</h2>
+                     <div className="flex flex-col gap-8 max-w-2xl">
+                        
+                        {/* HMI Status */}
+                        <div className="flex flex-col gap-3">
+                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">HMI Status</h3>
+                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div className="flex flex-col">
+                                    <span className="text-muted-foreground text-xs">Backend Connection</span>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <div className={`w-2 h-2 rounded-full ${backendConnected ? 'bg-green-500' : 'bg-red-500'}`} />
+                                        <span className="font-medium">{backendConnected ? 'Connected' : 'Disconnected'}</span>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-muted-foreground text-xs">Robot Connection</span>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <div className={`w-2 h-2 rounded-full ${robotConnectionStatus === 'connected' ? 'bg-green-500' : robotConnectionStatus === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`} />
+                                        <span className="font-medium">{robotConnectionStatus === 'connected' ? 'Connected' : robotConnectionStatus === 'warning' ? 'Connection Lost' : 'Disconnected'}</span>
+                                    </div>
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-muted-foreground text-xs">HMI Version</span>
+                                    <span className="font-medium mt-1">v1.0.0-mockup</span>
+                                </div>
+                                <div className="flex flex-col">
+                                    <span className="text-muted-foreground text-xs">Links</span>
+                                    <div className="flex flex-col mt-1 gap-1">
+                                        <a href="https://github.com/kabot-io/kabot-zephyr" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">Firmware repo</a>
+                                        <a href="https://github.com/kpochwala/kabot-hmi-mockup" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">HMI repo</a>
+                                        <a href="https://discord.com/channels/1080485717970518126/1080485718624841770" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">Discord channel</a>
+                                    </div>
+                                </div>
                             </div>
                         </div>
+
+                        {/* Robot Status */}
+                        <div className="flex flex-col gap-3">
+                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Robot Status</h3>
+                            {connectedRobot ? (
+                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">IP Address</span>
+                                        <span className="font-medium mt-1 font-mono">{connectedRobot.ip}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">Serial Number</span>
+                                        <span className="font-medium mt-1 font-mono">{connectedRobot.serial}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">Human Name</span>
+                                        <span className="font-medium mt-1">{connectedRobot.human_name || "N/A"}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">Firmware Version</span>
+                                        <span className="font-medium mt-1">{connectedRobot.firmware_version || "N/A"}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">Control Port</span>
+                                        <span className="font-medium mt-1">{connectedRobot.port}</span>
+                                    </div>
+                                    <div className="flex flex-col">
+                                        <span className="text-muted-foreground text-xs">Claimed Status</span>
+                                        <span className="font-medium mt-1">
+                                            {connectedRobot.is_claimed_by_us ? "Claimed by us" : 
+                                             connectedRobot.is_claimed ? `Claimed by ${connectedRobot.claimed_by_ip}` : "Unclaimed"}
+                                        </span>
+                                    </div>
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground italic">No robot is currently connected.</div>
+                            )}
+                        </div>
+
+                        {/* Robot Override Details */}
+                        <div className="flex flex-col gap-3">
+                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Configurations</h3>
+                            <div className="flex flex-col gap-4 max-w-sm">
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs font-semibold">Robot IP Override</span>
+                                    <input 
+                                        type="text" 
+                                        value={robotIp} 
+                                        onChange={(e) => setRobotIp(e.target.value)} 
+                                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                                        placeholder="Auto-discovered"
+                                    />
+                                    <span className="text-[10px] text-muted-foreground mt-1">Leave empty to use auto-discovery.</span>
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                    <span className="text-xs font-semibold">Scripts Folder Path</span>
+                                    <input
+                                        type="text"
+                                        value={scriptsPath}
+                                        onChange={(e) => setScriptsPath(e.target.value)}
+                                        onBlur={() => sendScriptsPath(scriptsPath)}
+                                        onKeyDown={(e) => {
+                                          if (e.key === "Enter") {
+                                            e.preventDefault();
+                                            sendScriptsPath(scriptsPath);
+                                          }
+                                        }}
+                                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
+                                        placeholder="backend/scripts"
+                                    />
+                                </div>
+                            </div>
+                        </div>
+
                      </div>
-                  </ResizablePanel>
-                  <ResizableHandle withHandle className="h-1 bg-border cursor-row-resize" />
-                  <ResizablePanel defaultSize={40} minSize={15} className="flex flex-col bg-black text-green-400 font-mono text-xs p-4 overflow-y-auto">
-                     <div className="text-[10px] uppercase font-bold text-muted-foreground mb-2 sticky top-0 bg-black py-1">Device Shell Output</div>
-                     {logs.length === 0 && <span className="opacity-50">No logs...</span>}
-                     {logs.map((log, i) => <div key={i}>{log}</div>)}
                   </ResizablePanel>
                 </ResizablePanelGroup>
             )}

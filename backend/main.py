@@ -25,8 +25,10 @@ app.add_middleware(
 
 UDP_STATE_PORT = 30011
 UDP_CONTROL_PORT = 30010
-UDP_TARGET_IP = '172.20.10.2'
-udp_target_ip = UDP_TARGET_IP
+
+udp_target_ip = None
+last_state_time = 0.0
+robot_connection_status = 'disconnected'
 
 DEFAULT_SCRIPTS_DIR = Path(os.environ.get('XDG_DATA_HOME', Path.home() / '.local' / 'share')) / 'kabot-hmi' / 'scripts'
 scripts_dir = DEFAULT_SCRIPTS_DIR
@@ -199,10 +201,12 @@ async def perform_discovery_sweep():
     interfaces = psutil.net_if_addrs()
     subnets = []
     
+    local_ips = set()
     for iface_name, addrs in interfaces.items():
         for addr in addrs:
             if addr.family == socket.AF_INET:
                 ip = addr.address
+                local_ips.add(ip)
                 netmask = addr.netmask
                 if netmask:
                     try:
@@ -242,7 +246,8 @@ async def perform_discovery_sweep():
                     'ip': addr[0],
                     'port': resp.control_port,
                     'is_claimed': resp.is_claimed,
-                    'claimed_by_ip': resp.claimed_by_ip
+                    'claimed_by_ip': resp.claimed_by_ip,
+                    'is_claimed_by_us': resp.is_claimed and (resp.claimed_by_ip in local_ips)
                 }
                 key = f"{resp.serial}_{addr[0]}"
                 discovered_robots[key] = info
@@ -251,38 +256,50 @@ async def perform_discovery_sweep():
             except Exception:
                 continue
 
-    for network in subnets:
-        is_loop = network.network_address.is_loopback
-        if is_loop:
-            try:
-                sock_discover.sendto(req_data, ("127.0.0.1", 30012))
-            except Exception:
-                pass
-                
-    await asyncio.sleep(0.15)
-    drain_socket()
-    
-    for network in subnets:
-        is_loop = network.network_address.is_loopback
-        if is_loop:
-            continue
+    for sweep_idx in range(3):
+        # Multicast / Broadcast scan (new)
+        try:
+            sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+            sock_discover.sendto(req_data, ("255.255.255.255", 30012))
+        except Exception:
+            pass
             
-        if network.num_addresses > 65536:
-            await _broadcast_json({'type': 'log', 'data': f'Sweeping large network {network}...'})
-        count = 0
-        
-        hosts = network.hosts() if network.prefixlen < 32 else [network.network_address]
-            
-        for ip in hosts:
-            try:
-                sock_discover.sendto(req_data, (str(ip), 30012))
-            except Exception:
-                pass
-            count += 1
-            if count % 1000 == 0:
-                await asyncio.sleep(0) # yield control
+        for network in subnets:
+            if network.network_address.is_loopback:
+                try:
+                    sock_discover.sendto(req_data, ("127.0.0.1", 30012))
+                except Exception:
+                    pass
+            else:
+                try:
+                    sock_discover.sendto(req_data, (str(network.broadcast_address), 30012))
+                except Exception:
+                    pass
+
+        # Singleshot udp scan (current)
+        for network in subnets:
+            if network.network_address.is_loopback:
+                continue
                 
-    await _broadcast_json({'type': 'log', 'data': 'Sweep packets sent. Waiting for responses...'})
+            if sweep_idx == 0 and network.num_addresses > 65536:
+                await _broadcast_json({'type': 'log', 'data': f'Sweeping large network {network}...'})
+            count = 0
+            
+            hosts = network.hosts() if network.prefixlen < 32 else [network.network_address]
+                
+            for ip in hosts:
+                try:
+                    sock_discover.sendto(req_data, (str(ip), 30012))
+                except Exception:
+                    pass
+                count += 1
+                if count % 1000 == 0:
+                    await asyncio.sleep(0) # yield control
+                    
+        await asyncio.sleep(0.2)
+        drain_socket()
+                
+    await _broadcast_json({'type': 'log', 'data': 'Sweep packets sent. Waiting for late responses...'})
     await asyncio.sleep(0.8)
     drain_socket()
     
@@ -291,6 +308,7 @@ async def perform_discovery_sweep():
         await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
     else:
         await _broadcast_json({'type': 'log', 'data': 'Discovery sweep finished. No robots found.'})
+        await _broadcast_json({'type': 'robots_discovered', 'robots': []})
         
     sock_discover.close()
 
@@ -350,9 +368,51 @@ async def udp_loop():
         except BlockingIOError:
             await asyncio.sleep(0.01)
         except Exception as e:
+            print(f"udp_loop exception: {e}")
+            import traceback
+            traceback.print_exc()
             await asyncio.sleep(0.01)
 
 original_ppid = os.getppid()
+
+async def continuous_ping():
+    global udp_target_ip, UDP_STATE_PORT
+    fail_count = 0
+    last_ping_status = 'disconnected'
+    while True:
+        await asyncio.sleep(1)
+        if not udp_target_ip:
+            fail_count = 0
+            last_ping_status = 'disconnected'
+            continue
+            
+        req = pb2.Bonjour()
+        req.hmi_port = UDP_STATE_PORT
+        req.claim = False
+        req.release = False
+        req_data = req.SerializeToString()
+        
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as ping_sock:
+                ping_sock.bind(("0.0.0.0", 0))
+                ping_sock.settimeout(0.5)
+                ping_sock.sendto(req_data, (udp_target_ip, 30012))
+                ping_sock.recvfrom(2048)
+                fail_count = 0
+                if last_ping_status != 'connected':
+                    await _broadcast_json({'type': 'robot_connection_status', 'status': 'connected'})
+                    last_ping_status = 'connected'
+        except Exception:
+            fail_count += 1
+            if fail_count >= 3:
+                print(f"Ping failed {fail_count} times. Disconnecting.")
+                await _broadcast_json({'type': 'robot_disconnected'})
+                udp_target_ip = None
+                fail_count = 0
+                last_ping_status = 'disconnected'
+            elif last_ping_status != 'warning':
+                await _broadcast_json({'type': 'robot_connection_status', 'status': 'warning'})
+                last_ping_status = 'warning'
 
 async def check_parent_alive():
     while True:
@@ -366,6 +426,7 @@ async def startup_event():
     asyncio.create_task(udp_loop())
     asyncio.create_task(perform_discovery_sweep())
     asyncio.create_task(check_parent_alive())
+    asyncio.create_task(continuous_ping())
 
 @app.websocket('/ws')
 async def websocket_endpoint(websocket: WebSocket):
@@ -382,15 +443,7 @@ async def websocket_endpoint(websocket: WebSocket):
             msg = json.loads(data)
             print(f"WS Recv: {msg.get('type')}")
             
-            if msg.get('type') == 'validate':
-                code = msg.get('code', '')
-                try:
-                    _build_user_callable(code)
-                    await _send_json(websocket, {'type': 'validation_result', 'ok': True, 'message': 'Validation successful.'})
-                except Exception as e:
-                    await _send_json(websocket, {'type': 'validation_result', 'ok': False, 'message': f'Validation error: {e}'})
-            
-            elif msg.get('type') == 'run':
+            if msg.get('type') == 'run':
                 code = msg.get('code', '')
                 try:
                     user_callable = _build_user_callable(code)
@@ -510,6 +563,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         try:
                             claim_sock.recvfrom(2048)
                             await _broadcast_json({'type': 'log', 'data': f"Claim confirmed by {udp_target_ip}:30012"})
+                            await _broadcast_json({'type': 'claim_accepted', 'ip': udp_target_ip})
                         except TimeoutError:
                             await _broadcast_json({'type': 'log', 'data': f"Claim sent to {udp_target_ip} but timed out"})
                 except Exception as e:
@@ -533,8 +587,9 @@ async def websocket_endpoint(websocket: WebSocket):
                                 await _broadcast_json({'type': 'log', 'data': f"Release sent to {udp_target_ip} but timed out"})
                     except Exception as e:
                         await _broadcast_json({'type': 'log', 'data': f"Error releasing {udp_target_ip}: {e}"})
+                old_ip = udp_target_ip
                 udp_target_ip = None
-                await _broadcast_json({'type': 'robot_released'})
+                await _broadcast_json({'type': 'robot_released', 'ip': old_ip})
 
     except WebSocketDisconnect:
         if websocket in active_connections:

@@ -48,7 +48,7 @@ From repo root:
   - left: `-1, 1`
   - right: `1, -1`
 - Manual control target IP is configurable in the scope toolbar.
-- Default control target IP is `172.20.10.2`.
+
 
 ## Key folders
 

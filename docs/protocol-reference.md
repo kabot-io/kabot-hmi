@@ -16,7 +16,7 @@ Fields currently sent:
 Transport:
 
 - UDP destination port: `30010`
-- UDP destination IP: configurable from UI (default `172.20.10.2`)
+- UDP destination IP: configurable from UI
 
 ## State message consumed by this HMI
 
