@@ -312,9 +312,11 @@ export default function Home() {
         } else if (msg.type === "robot_disconnected") {
           setConnectedRobot(null);
           setRobotConnectionStatus('disconnected');
+          setSelectedRobotSerial("");
         } else if (msg.type === "robot_released") {
           setConnectedRobot(null);
           setRobotConnectionStatus('disconnected');
+          setSelectedRobotSerial("");
           setDiscoveredRobots(prev => prev.map(r => 
             (msg.ip ? r.ip === msg.ip : true) ? { ...r, is_claimed: false, is_claimed_by_us: false } : r
           ));
