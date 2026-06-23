@@ -1,0 +1,35 @@
+name: Create Release
+
+on:
+  push:
+    tags:
+      - '*' # Triggers on any tag push
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # Needed to create a release
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # Fetch all history so conventional-changelog can find the previous tag
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Generate Changelog
+        run: |
+          # Use conventional-changelog to generate notes between this tag and the previous one
+          npx conventional-changelog-cli -p angular -r 2 > RELEASE_NOTES.md
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          body_path: RELEASE_NOTES.md
+          # Automatically mark as prerelease if the tag contains "-next" or "-dev"
+          prerelease: ${{ contains(github.ref, '-next') || contains(github.ref, '-dev') }}

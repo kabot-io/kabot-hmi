@@ -45,7 +45,7 @@ const scriptSchema = {
 
 export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
-  const [activeWorkspace, setActiveWorkspace] = useState("firmware");
+  const [activeWorkspace, setActiveWorkspace] = useState("code");
   const [stateData, setStateData] = useState<any>({});
   const [pausedState, setPausedState] = useState<any>(null);
   
@@ -317,8 +317,9 @@ export default function Home() {
           }
         } else if (msg.type === "claim_accepted") {
           setDiscoveredRobots(prev => prev.map(r => 
-            r.ip === msg.ip ? { ...r, is_claimed: true } : r
+            r.ip === msg.ip ? { ...r, is_claimed: true, is_claimed_by_us: true } : r
           ));
+          setConnectedRobot((prev: any) => prev && prev.ip === msg.ip ? { ...prev, is_claimed: true, is_claimed_by_us: true } : prev);
         } else if (msg.type === "run_result") {
           if (msg.ok) {
             setIsRunning(true);
@@ -356,7 +357,6 @@ export default function Home() {
         } else if (msg.type === "robot_released") {
           setConnectedRobot(null);
           setRobotConnectionStatus('disconnected');
-          setSelectedRobotSerial("");
           setDiscoveredRobots(prev => prev.map(r => 
             (msg.ip ? r.ip === msg.ip : true) ? { ...r, is_claimed: false, is_claimed_by_us: false } : r
           ));
@@ -644,6 +644,26 @@ export default function Home() {
   }, [activeWorkspace]);
 
   useEffect(() => {
+    if (discoveredRobots.length > 0) return;
+    let isMounted = true;
+    
+    const triggerScan = () => {
+      if (!isMounted) return;
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+        wsRef.current.send(JSON.stringify({ type: "scan_robots" }));
+      }
+    };
+    
+    // Check every 3.5 seconds to see if we should request another sweep
+    const intervalId = setInterval(triggerScan, 3500);
+    
+    return () => {
+      isMounted = false;
+      clearInterval(intervalId);
+    };
+  }, [discoveredRobots.length]);
+
+  useEffect(() => {
     if (activeWorkspace !== "scope") {
       clearManualDirections();
     }
@@ -846,6 +866,98 @@ export default function Home() {
     return ((clamped - min) / (max - min)) * 100;
   };
 
+  const renderRobotSelector = () => {
+    const isAutoScanning = discoveredRobots.length === 0;
+    const currentIsScanning = isScanning || isAutoScanning;
+    
+    return (
+      <div className="flex items-center gap-2">
+        <div className={`w-2 h-2 rounded-full shrink-0 ${currentIsScanning ? 'bg-blue-500 animate-pulse' : robotConnectionStatus === 'connected' ? 'bg-green-500' : robotConnectionStatus === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`} />
+        <Select 
+          value={selectedRobotSerial} 
+          onValueChange={(val) => setSelectedRobotSerial(val || "")}
+          disabled={isAutoScanning}
+        >
+          <SelectTrigger className="w-80 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
+            <SelectValue placeholder={currentIsScanning ? "Searching..." : "Select Robot"}>
+              {(() => {
+                if (isAutoScanning) return "Searching...";
+                const r = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
+                if (r) return `${r.ip}${r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}`;
+                if (selectedRobotSerial) return selectedRobotSerial.split('_')[1] || selectedRobotSerial;
+                return currentIsScanning ? "Searching..." : "Select Robot";
+              })()}
+            </SelectValue>
+          </SelectTrigger>
+          <SelectContent>
+            {discoveredRobots.map(r => {
+              const uniqueId = `${r.serial}_${r.ip}`;
+              return (
+                <SelectItem key={uniqueId} value={uniqueId} className="text-xs">
+                  {r.ip}{r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}
+                </SelectItem>
+              );
+            })}
+          </SelectContent>
+        </Select>
+        <Button
+          size="sm"
+          variant="default"
+          className="h-8 px-2"
+          disabled={
+            !selectedRobotSerial || 
+            discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial)?.is_claimed ||
+            isAutoScanning
+          }
+          onClick={() => {
+            const robot = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
+            if (robot && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              setConnectedRobot(robot);
+              wsRef.current.send(JSON.stringify({ 
+                type: "claim_robot", 
+                ip: robot.ip, 
+                port: robot.port 
+              }));
+            }
+          }}
+          title="Claim Selected Robot"
+        >
+          Claim
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 px-2"
+          disabled={!connectedRobot}
+          onClick={() => {
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              setConnectedRobot(null);
+              wsRef.current.send(JSON.stringify({ type: "release_robot" }));
+            }
+          }}
+          title="Release Claimed Robot"
+        >
+          Unclaim
+        </Button>
+        <Button
+          size="sm"
+          variant="outline"
+          className="h-8 px-2"
+          disabled={currentIsScanning}
+          onClick={() => {
+            setIsScanning(true);
+            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+              wsRef.current.send(JSON.stringify({ type: "scan_robots" }));
+            }
+          }}
+          title="Scan for Robots"
+        >
+          <Search className={`w-4 h-4 ${currentIsScanning ? 'animate-spin' : ''}`} />
+        </Button>
+      </div>
+    );
+  };
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground text-sm font-sans">
       <div className="w-14 shrink-0 border-r flex flex-col items-center py-4 gap-6 bg-muted/10">
@@ -915,86 +1027,7 @@ export default function Home() {
                 >
                   Load
                 </Button>
-                <div className="flex items-center gap-2">
-                  <Select 
-                    value={selectedRobotSerial} 
-                    onValueChange={(val) => setSelectedRobotSerial(val || "")}
-                  >
-                    <SelectTrigger className="w-80 h-8 text-xs border-0 bg-muted/50 focus:ring-0">
-                      <SelectValue placeholder="Select Robot">
-                        {(() => {
-                          const r = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
-                          if (r) return `${r.ip}${r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}`;
-                          if (selectedRobotSerial) return selectedRobotSerial.split('_')[1] || selectedRobotSerial;
-                          return "Select Robot";
-                        })()}
-                      </SelectValue>
-                    </SelectTrigger>
-                    <SelectContent>
-                      {discoveredRobots.map(r => {
-                        const uniqueId = `${r.serial}_${r.ip}`;
-                        return (
-                          <SelectItem key={uniqueId} value={uniqueId} className="text-xs">
-                            {r.ip}{r.is_claimed ? ` claimed by ${r.is_claimed_by_us ? 'us' : r.claimed_by_ip}` : ''}
-                          </SelectItem>
-                        );
-                      })}
-                    </SelectContent>
-                  </Select>
-                  <Button
-                    size="sm"
-                    variant="default"
-                    className="h-8 px-2"
-                    disabled={
-                      !selectedRobotSerial || 
-                      discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial)?.is_claimed
-                    }
-                    onClick={() => {
-                      const robot = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
-                      if (robot && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                        setConnectedRobot(robot);
-                        wsRef.current.send(JSON.stringify({ 
-                          type: "claim_robot", 
-                          ip: robot.ip, 
-                          port: robot.port 
-                        }));
-                      }
-                    }}
-                    title="Claim Selected Robot"
-                  >
-                    Claim
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 px-2"
-                    disabled={!connectedRobot}
-                    onClick={() => {
-                      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                        setConnectedRobot(null);
-                        wsRef.current.send(JSON.stringify({ type: "release_robot" }));
-                      }
-                    }}
-                    title="Release Claimed Robot"
-                  >
-                    Unclaim
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    className="h-8 px-2"
-                    disabled={isScanning}
-                    onClick={() => {
-                      setIsScanning(true);
-                      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                        wsRef.current.send(JSON.stringify({ type: "scan_robots" }));
-                      }
-                    }}
-                    title="Scan for Robots"
-                  >
-                    <Search className={`w-4 h-4 ${isScanning ? 'animate-spin' : ''}`} />
-                  </Button>
-                </div>
+                {renderRobotSelector()}
             </div>
         )}
 
@@ -1259,13 +1292,6 @@ export default function Home() {
                                     </div>
                                 </div>
                                 <div className="flex flex-col">
-                                    <span className="text-muted-foreground text-xs">Robot Connection</span>
-                                    <div className="flex items-center gap-2 mt-1">
-                                        <div className={`w-2 h-2 rounded-full ${robotConnectionStatus === 'connected' ? 'bg-green-500' : robotConnectionStatus === 'warning' ? 'bg-yellow-500' : 'bg-red-500'}`} />
-                                        <span className="font-medium">{robotConnectionStatus === 'connected' ? 'Connected' : robotConnectionStatus === 'warning' ? 'Connection Lost' : 'Disconnected'}</span>
-                                    </div>
-                                </div>
-                                <div className="flex flex-col">
                                     <span className="text-muted-foreground text-xs">HMI Version</span>
                                     <span className="font-medium mt-1">v1.0.0-mockup</span>
                                 </div>
@@ -1282,9 +1308,12 @@ export default function Home() {
 
                         {/* Robot Status */}
                         <div className="flex flex-col gap-3">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Robot Status</h3>
+                            <div className="flex items-center justify-between border-b pb-1">
+                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Robot Status</h3>
+                                {renderRobotSelector()}
+                            </div>
                             {connectedRobot ? (
-                                <div className="grid grid-cols-2 gap-4 text-sm">
+                                <div className="grid grid-cols-2 gap-4 text-sm mt-2">
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">IP Address</span>
                                         <span className="font-medium mt-1 font-mono">{connectedRobot.ip}</span>
@@ -1314,43 +1343,8 @@ export default function Home() {
                                     </div>
                                 </div>
                             ) : (
-                                <div className="text-sm text-muted-foreground italic">No robot is currently connected.</div>
+                                <div className="text-sm text-muted-foreground italic mt-2">No robot is currently connected.</div>
                             )}
-                        </div>
-
-                        {/* Robot Override Details */}
-                        <div className="flex flex-col gap-3">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Configurations</h3>
-                            <div className="flex flex-col gap-4 max-w-sm">
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-xs font-semibold">Robot IP Override</span>
-                                    <input 
-                                        type="text" 
-                                        value={robotIp} 
-                                        onChange={(e) => setRobotIp(e.target.value)} 
-                                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                        placeholder="Auto-discovered"
-                                    />
-                                    <span className="text-[10px] text-muted-foreground mt-1">Leave empty to use auto-discovery.</span>
-                                </div>
-                                <div className="flex flex-col gap-1">
-                                    <span className="text-xs font-semibold">Scripts Folder Path</span>
-                                    <input
-                                        type="text"
-                                        value={scriptsPath}
-                                        onChange={(e) => setScriptsPath(e.target.value)}
-                                        onBlur={() => sendScriptsPath(scriptsPath)}
-                                        onKeyDown={(e) => {
-                                          if (e.key === "Enter") {
-                                            e.preventDefault();
-                                            sendScriptsPath(scriptsPath);
-                                          }
-                                        }}
-                                        className="flex h-9 w-full rounded-md border border-input bg-transparent px-3 py-1 text-sm shadow-sm transition-colors file:border-0 file:bg-transparent file:text-sm file:font-medium placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50"
-                                        placeholder="backend/scripts"
-                                    />
-                                </div>
-                            </div>
                         </div>
 
                      </div>
