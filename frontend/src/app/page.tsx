@@ -985,7 +985,11 @@ export default function Home() {
           auto search:
           <Checkbox 
             checked={isAutoSearchEnabled} 
-            onCheckedChange={(c) => setIsAutoSearchEnabled(!!c)} 
+            onCheckedChange={(c) => {
+              const enabled = !!c;
+              setIsAutoSearchEnabled(enabled);
+              setLogs(prev => [...prev, `[HMI] Auto search ${enabled ? 'enabled' : 'disabled'}`]);
+            }} 
           />
         </label>
       </div>
