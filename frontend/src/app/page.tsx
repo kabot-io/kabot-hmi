@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import { open as openTauriShell } from '@tauri-apps/plugin-shell';
 import Editor from "@monaco-editor/react";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -45,6 +46,20 @@ const scriptSchema = {
 
 export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
+
+  const handleLinkClick = async (e: React.MouseEvent<HTMLAnchorElement>, url: string) => {
+    e.preventDefault();
+    try {
+      if (typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window) {
+        await openTauriShell(url);
+      } else {
+        window.open(url, '_blank', 'noreferrer');
+      }
+    } catch (err) {
+      console.error("Failed to open link:", err);
+      window.open(url, '_blank', 'noreferrer');
+    }
+  };
   const [activeWorkspace, setActiveWorkspace] = useState("code");
   const [stateData, setStateData] = useState<any>({});
   const [pausedState, setPausedState] = useState<any>(null);
@@ -1301,9 +1316,9 @@ export default function Home() {
                                 <div className="flex flex-col">
                                     <span className="text-muted-foreground text-xs">Links</span>
                                     <div className="flex flex-col mt-1 gap-1">
-                                        <a href="https://github.com/kabot-io/kabot-zephyr" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">Firmware repo</a>
-                                        <a href="https://github.com/kpochwala/kabot-hmi-mockup" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">HMI repo</a>
-                                        <a href="https://discord.com/channels/1080485717970518126/1080485718624841770" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium">Discord channel</a>
+                                        <a href="https://github.com/kabot-io/kabot-zephyr" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium" onClick={(e) => handleLinkClick(e, "https://github.com/kabot-io/kabot-zephyr")}>Firmware repo</a>
+                                        <a href="https://github.com/kabot-io/kabot-hmi" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium" onClick={(e) => handleLinkClick(e, "https://github.com/kabot-io/kabot-hmi")}>HMI repo</a>
+                                        <a href="https://discord.com/channels/1080485717970518126/1080485718624841770" target="_blank" rel="noreferrer" className="text-blue-500 hover:underline font-medium" onClick={(e) => handleLinkClick(e, "https://discord.com/channels/1080485717970518126/1080485718624841770")}>Discord channel</a>
                                     </div>
                                 </div>
                             </div>
