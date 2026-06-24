@@ -894,7 +894,7 @@ export default function Home() {
   };
 
   const renderRobotSelector = () => {
-    const isAutoScanning = discoveredRobots.length === 0;
+    const isAutoScanning = discoveredRobots.length === 0 && isAutoSearchEnabled;
     const currentIsScanning = isScanning || isAutoScanning;
     
     return (
