@@ -8,6 +8,7 @@ This document tracks a major sequence of architectural and UI improvements made 
 - **Dynamic Discovery:** Completely removed the hardcoded target IP (`172.20.10.2`) across the frontend, backend, and documentation. 
 - **Auto-Claiming:** The Python backend now performs a 3-pass network discovery sweep. If a robot is found and claimed by our IP, it is automatically connected and set as the active target.
 - **Unclaimed Packet Dropping:** Modified the Python `udp_loop` to actively filter out incoming telemetry UDP packets unless they originate from the explicitly selected (claimed) robot. This prevents the UI from randomly bouncing or displaying data from unselected robots on the network.
+- **Auto Search Toggle:** Added a checkbox to disable automatic periodic robot discovery sweeps.
 
 ### 2. Teleoperation Controls
 - **Continuous Actuation:** Fixed a bug where holding down the teleop arrow keys only sent a single initial command. `sendManualControl` now accepts a `force` flag, allowing a `setInterval` hook to periodically send the control vector every 100ms, bypassing the previous deduplication logic.

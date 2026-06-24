@@ -138,6 +138,7 @@ export default function Home() {
   const [scriptName, setScriptName] = useState("control.py");
   
   const [robotIp, setRobotIp] = useState("localhost");
+  const [isAutoSearchEnabled, setIsAutoSearchEnabled] = useState(true);
   const [backendPort, setBackendPort] = useState<number>(8000);
 
   useEffect(() => {
@@ -659,7 +660,7 @@ export default function Home() {
   }, [activeWorkspace]);
 
   useEffect(() => {
-    if (discoveredRobots.length > 0) return;
+    if (discoveredRobots.length > 0 || !isAutoSearchEnabled) return;
     let isMounted = true;
     
     const triggerScan = () => {
@@ -676,7 +677,7 @@ export default function Home() {
       isMounted = false;
       clearInterval(intervalId);
     };
-  }, [discoveredRobots.length]);
+  }, [discoveredRobots.length, isAutoSearchEnabled]);
 
   useEffect(() => {
     if (activeWorkspace !== "scope") {
@@ -969,6 +970,13 @@ export default function Home() {
         >
           <Search className={`w-4 h-4 ${currentIsScanning ? 'animate-spin' : ''}`} />
         </Button>
+        <label className="flex items-center gap-1.5 text-xs text-muted-foreground ml-2 cursor-pointer">
+          auto search:
+          <Checkbox 
+            checked={isAutoSearchEnabled} 
+            onCheckedChange={(c) => setIsAutoSearchEnabled(!!c)} 
+          />
+        </label>
       </div>
     );
   };
