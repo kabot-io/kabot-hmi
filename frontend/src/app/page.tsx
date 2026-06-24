@@ -1035,7 +1035,7 @@ export default function Home() {
                 {!isRunning ? (
                   <>
                   <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning || robotConnectionStatus !== 'connected'} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
-                  <Button size="sm" variant="outline" className="font-bold w-[100px]" onClick={handleVerify} disabled={isRunning} title="Verify script statically"><Check className="w-4 h-4 mr-2" /> Verify</Button>
+                  <Button size="sm" variant="outline" className="font-bold w-[140px]" onClick={handleVerify} disabled={isRunning} title="Verify script syntax"><Check className="w-4 h-4 mr-2" /> Verify syntax</Button>
                   </>
                 ) : (
                   <Button size="sm" variant="destructive" className="font-bold animate-pulse w-[140px]" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop ({hzStats['state'] || '0.0'} Hz)</Button>

@@ -490,7 +490,7 @@ async def websocket_endpoint(websocket: WebSocket):
                         temp_path = f.name
                     
                     process = subprocess.Popen(
-                        [sys.executable, "-m", "mypy", temp_path, "--ignore-missing-imports"],
+                        [sys.executable, "-m", "py_compile", temp_path],
                         stdout=subprocess.PIPE,
                         stderr=subprocess.STDOUT,
                         text=True
@@ -501,10 +501,10 @@ async def websocket_endpoint(websocket: WebSocket):
                     os.remove(temp_path)
                     
                     if process.returncode == 0:
-                        await _send_json(websocket, {'type': 'log', 'data': 'Static verification passed! (mypy)'})
+                        await _send_json(websocket, {'type': 'log', 'data': 'Syntax verification passed!'})
                     else:
                         cleaned_out = stdout.replace(temp_path, "script.py")
-                        await _send_json(websocket, {'type': 'log', 'data': f"Static verification issues:\n{cleaned_out}"})
+                        await _send_json(websocket, {'type': 'log', 'data': f"Syntax verification issues:\n{cleaned_out}"})
                 except Exception as e:
                     await _send_json(websocket, {'type': 'log', 'data': f"Verification error: {e}"})
 
