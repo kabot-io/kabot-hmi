@@ -30,6 +30,7 @@ This document tracks a major sequence of architectural and UI improvements made 
 ### 5. General QoL Improvements
 - **Window Maximization:** Updated `tauri.conf.json` to launch the application maximized by default.
 - **Action Buttons:** Renamed the "Start" script button to "Run script". Standardized the width of the Run and Stop buttons to prevent UI jitter, and added a glowing red breathing animation to the "Stop" button.
+- **Verify Button:** Restored the "Verify" button next to the Run button. It triggers a static type check (via `mypy`) on the backend and displays the results in the log console.
 - **Logs Console:** Implemented auto-scrolling to the bottom of the logs console when new messages arrive.
 ### 6. Connection State Refactoring & Active Ping Loop
 - **Bug Fix for Auto-Claiming:** The frontend now explicitly sends a `claim_robot` message back to the backend when an already-claimed robot is discovered. This allows the backend to appropriately bind its target IP and ensures the telemetry stream starts correctly (un-freezing the plots).

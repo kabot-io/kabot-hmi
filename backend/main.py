@@ -479,6 +479,35 @@ async def websocket_endpoint(websocket: WebSocket):
                 await _send_json(websocket, {'type': 'log', 'data': 'Stopped user script.'})
                 await _set_runtime_active(False)
 
+            elif msg.get('type') == 'verify':
+                code_text = msg.get('code', '')
+                import tempfile
+                import subprocess
+                import sys
+                try:
+                    with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
+                        f.write(code_text.encode('utf-8'))
+                        temp_path = f.name
+                    
+                    process = subprocess.Popen(
+                        [sys.executable, "-m", "mypy", temp_path, "--ignore-missing-imports"],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.STDOUT,
+                        text=True
+                    )
+                    stdout, _ = process.communicate()
+                    
+                    import os
+                    os.remove(temp_path)
+                    
+                    if process.returncode == 0:
+                        await _send_json(websocket, {'type': 'log', 'data': 'Static verification passed! (mypy)'})
+                    else:
+                        cleaned_out = stdout.replace(temp_path, "script.py")
+                        await _send_json(websocket, {'type': 'log', 'data': f"Static verification issues:\n{cleaned_out}"})
+                except Exception as e:
+                    await _send_json(websocket, {'type': 'log', 'data': f"Verification error: {e}"})
+
             elif msg.get('type') == 'control':
                 effort = msg.get('effort', {}) or {}
                 try:

@@ -700,6 +700,17 @@ export default function Home() {
     }
   };
 
+  const handleVerify = () => {
+    const runtimeCode = getEditorCode();
+    if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+      setLogs([]);
+      if (editorRef.current && monacoRef.current) {
+        decorationsRef.current = editorRef.current.deltaDecorations(decorationsRef.current, []);
+      }
+      wsRef.current.send(JSON.stringify({ type: "verify", code: runtimeCode }));
+    }
+  };
+
   const handleStop = () => {
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
       wsRef.current.send(JSON.stringify({ type: "stop" }));
@@ -1018,7 +1029,10 @@ export default function Home() {
         {activeWorkspace === "code" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
                 {!isRunning ? (
+                  <>
                   <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning || robotConnectionStatus !== 'connected'} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
+                  <Button size="sm" variant="outline" className="font-bold w-[100px]" onClick={handleVerify} disabled={isRunning} title="Verify script statically"><Check className="w-4 h-4 mr-2" /> Verify</Button>
+                  </>
                 ) : (
                   <Button size="sm" variant="destructive" className="font-bold animate-pulse w-[140px]" onClick={handleStop} title="Stop"><Square className="w-4 h-4 mr-2 fill-current" /> Stop ({hzStats['state'] || '0.0'} Hz)</Button>
                 )}
