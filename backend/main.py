@@ -38,6 +38,131 @@ current_user_callable = None
 active_connections = []
 
 
+def verify_script(code_text: str):
+    import ast
+    import traceback
+    import tempfile
+    import os
+    from mypy import api
+    
+    class SemanticChecker(ast.NodeVisitor):
+        def __init__(self):
+            self.errors = []
+        
+        def visit_Module(self, node):
+            has_control = any(isinstance(n, ast.FunctionDef) and n.name == 'control' for n in node.body)
+            if not has_control:
+                first_node = node.body[0] if getattr(node, 'body', None) else node
+                if not hasattr(first_node, 'lineno'):
+                    first_node.lineno = 1
+                    first_node.col_offset = 0
+                self.errors.append((first_node, "TypeError: Script must define a function named 'control'"))
+            self.generic_visit(node)
+            
+        def visit_FunctionDef(self, node):
+            if node.name == 'control':
+                if len(node.args.args) < 2:
+                    self.errors.append((node, "TypeError: 'control' must accept at least two parameters: state and control"))
+                
+                has_return = False
+                for n in ast.walk(node):
+                    if isinstance(n, ast.Return):
+                        has_return = True
+                        if n.value is None:
+                            self.errors.append((n, "TypeError: Function 'control' must return a value (expected RobotControl)"))
+                if not has_return:
+                    self.errors.append((node, "TypeError: Function 'control' is missing a return statement"))
+            self.generic_visit(node)
+
+        def visit_Attribute(self, node):
+            chain = []
+            curr = node
+            while isinstance(curr, ast.Attribute):
+                chain.append(curr.attr)
+                curr = curr.value
+            if isinstance(curr, ast.Name):
+                chain.append(curr.id)
+                chain.reverse()
+                full_path = ".".join(chain)
+                
+                if chain[0] == 'control':
+                    valid = ['control', 'control.effort', 'control.effort.x', 'control.effort.y']
+                    if full_path not in valid:
+                        self.errors.append((node, f"AttributeError: invalid attribute '{full_path}'"))
+                elif chain[0] == 'state':
+                    valid_state_attrs = [
+                        'distance', 'effort', 'linear_acceleration', 'angular_velocity', 'magnetic_field',
+                        'light_left', 'light_right', 'current_left', 'bus_voltage_left', 'power_left',
+                        'current_right', 'bus_voltage_right', 'power_right', 'current_supply',
+                        'bus_voltage_supply', 'power_supply', 'stamps'
+                    ]
+                    valid_vec2 = ['x', 'y']
+                    valid_vec3 = ['x', 'y', 'z']
+                    is_valid = False
+                    if len(chain) == 2 and chain[1] in valid_state_attrs:
+                        is_valid = True
+                    elif len(chain) == 3:
+                        if chain[1] == 'effort' and chain[2] in valid_vec2:
+                            is_valid = True
+                        elif chain[1] in ['linear_acceleration', 'angular_velocity', 'magnetic_field'] and chain[2] in valid_vec3:
+                            is_valid = True
+                    elif len(chain) == 1:
+                        is_valid = True
+                    if not is_valid:
+                        self.errors.append((node, f"AttributeError: invalid attribute '{full_path}'"))
+            self.generic_visit(node)
+
+    tree = ast.parse(code_text, filename="<user_code>")
+    checker = SemanticChecker()
+    checker.visit(tree)
+    
+    code_with_imports = "from models import RobotState, RobotControl, Vector2, Vector3\nimport math\n" + code_text
+    with tempfile.NamedTemporaryFile(mode='w', suffix='.py', delete=False, dir=".") as f:
+        f.write(code_with_imports)
+        temp_path = f.name
+        
+    try:
+        result, _, _ = api.run([temp_path, '--show-column-numbers', '--ignore-missing-imports', '--follow-imports=skip'])
+        base_name = os.path.basename(temp_path)
+        for line in result.splitlines():
+            if line.startswith(base_name):
+                parts = line.split(":", 4)
+                if len(parts) >= 5:
+                    lineno = int(parts[1]) - 2
+                    col = int(parts[2])
+                    msg_type = parts[3].strip()
+                    msg_text = parts[4].strip()
+                    if lineno > 0:
+                        class DummyNode:
+                            pass
+                        n = DummyNode()
+                        n.lineno = lineno
+                        n.col_offset = col - 1
+                        checker.errors.append((n, f"{msg_type.capitalize()}: {msg_text}"))
+    finally:
+        try:
+            os.remove(temp_path)
+        except OSError:
+            pass
+    
+    if checker.errors:
+        err_strs = []
+        for node, msg_err in checker.errors:
+            err = SyntaxError(msg_err)
+            err.filename = "<user_code>"
+            err.lineno = node.lineno
+            err.offset = getattr(node, 'col_offset', 0) + 1
+            lines = code_text.splitlines()
+            err.text = lines[node.lineno - 1] + "\n" if 0 <= node.lineno - 1 < len(lines) else "\n"
+            err_lines = traceback.format_exception_only(type(err), err)
+            err_str = "".join(err_lines).strip()
+            err_str = err_str.replace("SyntaxError: ", "")
+            err_strs.append(err_str)
+        
+        full_err_str = "\n\n".join(err_strs)
+        return f"Warning parsing script:\n{full_err_str}"
+    return ""
+
 def _build_user_callable(code: str):
     compiled = compile(code, '<user_code>', 'exec')
     local_env = {
@@ -85,7 +210,26 @@ async def _send_json(conn: WebSocket, payload: dict):
         await conn.send_text(json.dumps(payload))
 
 
+
+def format_log(source: str, msg: str) -> str:
+    prefix = f"[{source}] "
+    lines = str(msg).splitlines()
+    if not lines:
+        return prefix
+    out = prefix + lines[0]
+    indent = " " * len(prefix)
+    for line in lines[1:]:
+        out += f"\n{indent}{line}"
+    return out
+
+async def _broadcast_log(source: str, msg: str):
+    await _broadcast_json({'type': 'log', 'data': format_log(source, msg)})
+
+async def _send_log(conn, source: str, msg: str):
+    await _send_json(conn, {'type': 'log', 'data': format_log(source, msg)})
+
 async def _broadcast_json(payload: dict):
+
     stale = []
     data = json.dumps(payload)
     lock = await get_ws_lock()
@@ -209,7 +353,7 @@ sock_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 async def perform_discovery_sweep():
     global udp_target_ip, UDP_CONTROL_PORT
-    await _broadcast_json({'type': 'log', 'data': 'Starting robot discovery sweep...'})
+    await _broadcast_log('HMI', 'Starting robot discovery sweep...')
     interfaces = psutil.net_if_addrs()
     subnets = []
     
@@ -271,12 +415,12 @@ async def perform_discovery_sweep():
     last_sweep_time = getattr(perform_discovery_sweep, 'last_sweep_time', 0)
     current_time = asyncio.get_event_loop().time()
     if current_time - last_sweep_time < 5.0:
-        await _broadcast_json({'type': 'log', 'data': 'Discovery sweep throttled (too soon).'})
+        await _broadcast_log('HMI', 'Discovery sweep throttled (too soon).')
         await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
         return
     perform_discovery_sweep.last_sweep_time = current_time
 
-    await _broadcast_json({'type': 'log', 'data': 'Starting fast broadcast discovery sweep...'})
+    await _broadcast_log('HMI', 'Starting fast broadcast discovery sweep...')
     
     # Broadcast scan
     sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
@@ -289,13 +433,13 @@ async def perform_discovery_sweep():
     drain_socket()
     
     if discovered_robots:
-        await _broadcast_json({'type': 'log', 'data': f"Broadcast sweep finished. Found {len(discovered_robots)} robots."})
+        await _broadcast_log('HMI', f"Broadcast sweep finished. Found {len(discovered_robots)} robots.")
         await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
         sock_discover.close()
         return
 
     # If no robots found by broadcast, proceed with full sweep
-    await _broadcast_json({'type': 'log', 'data': 'No robots found via broadcast. Proceeding with full subnet sweep...'})
+    await _broadcast_log('HMI', 'No robots found via broadcast. Proceeding with full subnet sweep...')
     for sweep_idx in range(1):
         for subnet in subnets:
             for ip in subnet.hosts():
@@ -306,15 +450,15 @@ async def perform_discovery_sweep():
                     pass
             drain_socket()
                 
-    await _broadcast_json({'type': 'log', 'data': 'Sweep packets sent. Waiting for late responses...'})
+    await _broadcast_log('HMI', 'Sweep packets sent. Waiting for late responses...')
     await asyncio.sleep(0.8)
     drain_socket()
     
     if discovered_robots:
-        await _broadcast_json({'type': 'log', 'data': f"Discovery sweep finished. Found {len(discovered_robots)} robots."})
+        await _broadcast_log('HMI', f"Discovery sweep finished. Found {len(discovered_robots)} robots.")
         await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
     else:
-        await _broadcast_json({'type': 'log', 'data': 'Discovery sweep finished. No robots found.'})
+        await _broadcast_log('HMI', 'Discovery sweep finished. No robots found.')
         await _broadcast_json({'type': 'robots_discovered', 'robots': []})
         
     sock_discover.close()
@@ -363,7 +507,7 @@ async def udp_loop():
                     printed = stdio_buffer.getvalue().strip()
                     if printed:
                         for line in printed.splitlines()[-40:]:
-                            await _broadcast_json({'type': 'log', 'data': f'[user] {line}'})
+                            await _broadcast_log('User Script', f'{line}')
 
                     normalized_ctrl = _normalize_control(raw_result)
                     out_data = encode_control(normalized_ctrl)
@@ -372,7 +516,7 @@ async def udp_loop():
                     current_user_code = None
                     current_user_callable = None
                     err_text = traceback.format_exc()
-                    await _broadcast_json({'type': 'log', 'data': f"Runtime Error:\n{err_text}"})
+                    await _broadcast_log('User Script', f"Runtime Error:\n{err_text}")
                     await _set_runtime_active(False)
                     
         except BlockingIOError:
@@ -423,7 +567,7 @@ async def continuous_ping():
                 if current_user_callable:
                     current_user_callable = None
                     await _set_runtime_active(False)
-                    await _broadcast_json({'type': 'log', 'data': 'Robot disconnected. Stopped user script.'})
+                    await _broadcast_log('HMI', 'Robot disconnected. Stopped user script.')
             elif last_ping_status != 'warning':
                 await _broadcast_json({'type': 'robot_connection_status', 'status': 'warning'})
                 last_ping_status = 'warning'
@@ -459,54 +603,52 @@ async def websocket_endpoint(websocket: WebSocket):
             
             if msg.get('type') == 'run':
                 code = msg.get('code', '')
+                import traceback
                 try:
+                    warnings = verify_script(code)
+                    if warnings:
+                        await _broadcast_log('Script Validation', warnings)
+                        
                     user_callable = _build_user_callable(code)
                     current_user_code = code
                     await _send_json(websocket, {'type': 'run_result', 'ok': True, 'message': 'Running.'})
                     await _set_runtime_active(True)
                     current_user_callable = user_callable
+                except SyntaxError as e:
+                    err_lines = traceback.format_exception_only(type(e), e)
+                    err_str = "".join(err_lines).strip()
+                    await _broadcast_log('Script Validation', f"Error parsing script:\n{err_str}")
+                    await _send_json(websocket, {'type': 'run_result', 'ok': False, 'message': f'Run error: Syntax Error'})
+                    await _set_runtime_active(False)
                 except Exception as e:
                     err_text = traceback.format_exc()
                     current_user_code = None
                     current_user_callable = None
-                    await _broadcast_json({'type': 'log', 'data': f"Error parsing script:\n{err_text}"})
+                    await _broadcast_log('Script Validation', f"Error parsing script:\n{err_text}")
                     await _send_json(websocket, {'type': 'run_result', 'ok': False, 'message': f'Run error: {e}'})
                     await _set_runtime_active(False)
                     
             elif msg.get('type') == 'stop':
                 current_user_code = None
                 current_user_callable = None
-                await _send_json(websocket, {'type': 'log', 'data': 'Stopped user script.'})
+                await _send_log(websocket, 'User Script', 'Stopped user script.')
                 await _set_runtime_active(False)
 
             elif msg.get('type') == 'verify':
                 code_text = msg.get('code', '')
-                import tempfile
-                import subprocess
-                import sys
+                import traceback
                 try:
-                    with tempfile.NamedTemporaryFile(suffix=".py", delete=False) as f:
-                        f.write(code_text.encode('utf-8'))
-                        temp_path = f.name
-                    
-                    process = subprocess.Popen(
-                        [sys.executable, "-m", "py_compile", temp_path],
-                        stdout=subprocess.PIPE,
-                        stderr=subprocess.STDOUT,
-                        text=True
-                    )
-                    stdout, _ = process.communicate()
-                    
-                    import os
-                    os.remove(temp_path)
-                    
-                    if process.returncode == 0:
-                        await _send_json(websocket, {'type': 'log', 'data': 'Syntax verification passed!'})
+                    warnings = verify_script(code_text)
+                    if warnings:
+                        await _send_log(websocket, 'Script Validation', warnings)
                     else:
-                        cleaned_out = stdout.replace(temp_path, "script.py")
-                        await _send_json(websocket, {'type': 'log', 'data': f"Syntax verification issues:\n{cleaned_out}"})
+                        await _send_log(websocket, 'Script Validation', 'Syntax verification passed!')
+                except SyntaxError as e:
+                    err_lines = traceback.format_exception_only(type(e), e)
+                    err_str = "".join(err_lines).strip()
+                    await _send_log(websocket, 'Script Validation', f"Error parsing script:\n{err_str}")
                 except Exception as e:
-                    await _send_json(websocket, {'type': 'log', 'data': f"Verification error: {e}"})
+                    await _send_log(websocket, 'Script Validation', f"Verification error: {e}")
 
             elif msg.get('type') == 'control':
                 effort = msg.get('effort', {}) or {}
@@ -520,15 +662,15 @@ async def websocket_endpoint(websocket: WebSocket):
                     out_data = encode_control(ctrl)
                     sock_send.sendto(out_data, (udp_target_ip, UDP_CONTROL_PORT))
                 except Exception as e:
-                    await _send_json(websocket, {'type': 'log', 'data': f'Control send error: {e}'})
+                    await _send_log(websocket, 'HMI', f'Control send error: {e}')
 
             elif msg.get('type') == 'set_control_target_ip':
                 new_ip = (msg.get('ip', '') or '').strip()
                 if not new_ip:
-                    await _send_json(websocket, {'type': 'log', 'data': 'Control target IP update error: empty IP'})
+                    await _send_log(websocket, 'HMI', 'Control target IP update error: empty IP')
                 else:
                     udp_target_ip = new_ip
-                    await _send_json(websocket, {'type': 'log', 'data': f'Control target IP set to {udp_target_ip}:{UDP_CONTROL_PORT}'})
+                    await _send_log(websocket, 'HMI', f'Control target IP set to {udp_target_ip}:{UDP_CONTROL_PORT}')
 
             elif msg.get('type') == 'set_scripts_path':
                 new_path = (msg.get('path', '') or '').strip()
@@ -538,9 +680,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     scripts_dir = _resolve_scripts_dir(new_path)
                     await _send_json(websocket, {'type': 'scripts_config', 'path': str(scripts_dir)})
                     await _send_json(websocket, {'type': 'scripts_list', 'scripts': _list_scripts()})
-                    await _send_json(websocket, {'type': 'log', 'data': f'Scripts path set to {scripts_dir}'})
+                    await _send_log(websocket, 'HMI', f'Scripts path set to {scripts_dir}')
                 except Exception as e:
-                    await _send_json(websocket, {'type': 'log', 'data': f'Scripts path update error: {e}'})
+                    await _send_log(websocket, 'HMI', f'Scripts path update error: {e}')
 
             elif msg.get('type') == 'list_scripts':
                 await _send_json(websocket, {'type': 'scripts_list', 'scripts': _list_scripts()})
@@ -555,9 +697,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         script_name = _write_script(msg.get('name', ''), code)
                     await _send_json(websocket, {'type': 'script_saved', 'name': script_name})
-                    await _send_json(websocket, {'type': 'log', 'data': f'Script saved: {script_name}'})
+                    await _send_log(websocket, 'HMI', f'Script saved: {script_name}')
                 except Exception as e:
-                    await _send_json(websocket, {'type': 'log', 'data': f'Script save error: {e}'})
+                    await _send_log(websocket, 'HMI', f'Script save error: {e}')
 
             elif msg.get('type') == 'load_script':
                 try:
@@ -568,9 +710,9 @@ async def websocket_endpoint(websocket: WebSocket):
                     else:
                         script_name, script_code = _read_script(msg.get('name', ''))
                     await _send_json(websocket, {'type': 'script_loaded', 'name': script_name, 'code': script_code})
-                    await _send_json(websocket, {'type': 'log', 'data': f'Script loaded: {script_name}'})
+                    await _send_log(websocket, 'HMI', f'Script loaded: {script_name}')
                 except Exception as e:
-                    await _send_json(websocket, {'type': 'log', 'data': f'Script load error: {e}'})
+                    await _send_log(websocket, 'HMI', f'Script load error: {e}')
 
             elif msg.get('type') == 'scan_robots':
                 asyncio.create_task(perform_discovery_sweep())
@@ -591,11 +733,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             rel_sock.sendto(rel_req.SerializeToString(), (udp_target_ip, 30012))
                             try:
                                 rel_sock.recvfrom(2048)
-                                await _broadcast_json({'type': 'log', 'data': f"Release confirmed by {udp_target_ip}"})
+                                await _broadcast_log('HMI', f"Release confirmed by {udp_target_ip}")
                             except TimeoutError:
-                                await _broadcast_json({'type': 'log', 'data': f"Release sent to {udp_target_ip} but timed out"})
+                                await _broadcast_log('HMI', f"Release sent to {udp_target_ip} but timed out")
                     except Exception as e:
-                        await _broadcast_json({'type': 'log', 'data': f"Error releasing {udp_target_ip}: {e}"})
+                        await _broadcast_log('HMI', f"Error releasing {udp_target_ip}: {e}")
                         
                 udp_target_ip = ip
                 UDP_CONTROL_PORT = port
@@ -610,12 +752,12 @@ async def websocket_endpoint(websocket: WebSocket):
                         claim_sock.sendto(claim_req.SerializeToString(), (udp_target_ip, 30012))
                         try:
                             claim_sock.recvfrom(2048)
-                            await _broadcast_json({'type': 'log', 'data': f"Claim confirmed by {udp_target_ip}:30012"})
+                            await _broadcast_log('HMI', f"Claim confirmed by {udp_target_ip}:30012")
                             await _broadcast_json({'type': 'claim_accepted', 'ip': udp_target_ip})
                         except TimeoutError:
-                            await _broadcast_json({'type': 'log', 'data': f"Claim sent to {udp_target_ip} but timed out"})
+                            await _broadcast_log('HMI', f"Claim sent to {udp_target_ip} but timed out")
                 except Exception as e:
-                    await _broadcast_json({'type': 'log', 'data': f"Error claiming {udp_target_ip}: {e}"})
+                    await _broadcast_log('HMI', f"Error claiming {udp_target_ip}: {e}")
                     
             elif msg.get('type') == 'release_robot':
                 print(f"WS release_robot")
@@ -630,11 +772,11 @@ async def websocket_endpoint(websocket: WebSocket):
                             rel_sock.sendto(rel_req.SerializeToString(), (udp_target_ip, 30012))
                             try:
                                 rel_sock.recvfrom(2048)
-                                await _broadcast_json({'type': 'log', 'data': f"Release confirmed by {udp_target_ip}"})
+                                await _broadcast_log('HMI', f"Release confirmed by {udp_target_ip}")
                             except TimeoutError:
-                                await _broadcast_json({'type': 'log', 'data': f"Release sent to {udp_target_ip} but timed out"})
+                                await _broadcast_log('HMI', f"Release sent to {udp_target_ip} but timed out")
                     except Exception as e:
-                        await _broadcast_json({'type': 'log', 'data': f"Error releasing {udp_target_ip}: {e}"})
+                        await _broadcast_log('HMI', f"Error releasing {udp_target_ip}: {e}")
                 old_ip = udp_target_ip
                 udp_target_ip = None
                 await _broadcast_json({'type': 'robot_released', 'ip': old_ip})
