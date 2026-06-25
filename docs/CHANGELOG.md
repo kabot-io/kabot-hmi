@@ -40,3 +40,12 @@ This document tracks a major sequence of architectural and UI improvements made 
   - The dot turns Yellow ("Connection Lost") immediately if 1 or 2 pings are missed.
   - The dot turns Red ("Disconnected") and drops the connection state entirely if 3 consecutive pings fail (a window of ~3 seconds).
   - The dot returns to Green ("Connected") immediately upon a successful ping recovery.
+
+### 7. Script Path Context & Documentation
+- **Dataclass Semantics in Backend:** Upgraded the `RobotState` timestamp tracker to utilize a fully typed `Stamps` dataclass in `models.py` instead of a plain Python dictionary. This seamlessly enables users to use natural dot-notation (e.g., `state.stamps.light_right`) natively inside their Python `control()` scripts without encountering `AttributeError` exceptions.
+- **Rich Unit Trees in UI:** Restructured the Script Paths helper into an interactive, deeply-nested component tree (`ScriptTreeNode`). It now leverages embedded JSX to visually differentiate values and render complex physical units (like $m/s^2$ fractions and $rad/s$) elegantly.
+- **Hover Tooltips:** Injected standard HTML `title` tooltips natively into every schema property. Mouseovers now expose explicit hardware boundaries (e.g., `0.0-1.0`), sensor chip models (`DRV8837`, `INA219`), and detailed behavioral definitions for each state and control dimension.
+
+### 8. Build System & Version Automation
+- **Git-Aware Release Tags:** Fully automated versioning inside `build_appimage.sh`. The build process now dynamically queries `git describe --tags --always` prior to triggering the Tauri/Next.js toolchains. 
+- **Automated Manifest Injection:** If commits have occurred since the last tag, a `-next` suffix is explicitly applied (e.g., `0.2.0-next`); otherwise, the clean base tag is preserved. This derived string is seamlessly injected into `package.json`, `tauri.conf.json`, and `Cargo.toml`, ensuring completely hands-free version syncing across local tests and CI actions.
