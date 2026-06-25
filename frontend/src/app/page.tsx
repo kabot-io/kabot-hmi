@@ -32,63 +32,69 @@ const UnitInfo = ({ children }: any) => (
   <span className="text-muted-foreground/50 text-[10px] ml-1.5 font-sans normal-case tracking-normal">({children})</span>
 );
 
+const Leaf = (content: any, tooltip: string) => ({
+  _isLeaf: true,
+  content,
+  tooltip,
+});
+
 const scriptSchema = {
   state: {
-    distance: <>float<UnitInfo>meters, VL53L0X</UnitInfo></>,
+    distance: Leaf(<>float<UnitInfo>meters, VL53L0X</UnitInfo></>, "Distance measured by the time-of-flight sensor"),
     effort: { 
-      x: <>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></>, 
-      y: <>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></> 
+      x: Leaf(<>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></>, "How much effort (PWM) is applied to the motor - negative values are backwards, positive forward. x is left motor"), 
+      y: Leaf(<>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></>, "How much effort (PWM) is applied to the motor - negative values are backwards, positive forward. y is right motor") 
     },
     linear_acceleration: { 
-      x: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, 
-      y: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, 
-      z: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></> 
+      x: Leaf(<>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, "Linear acceleration measured by IMU, in the IC coordinate system, raw - non-calibrated"), 
+      y: Leaf(<>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, "Linear acceleration measured by IMU, in the IC coordinate system, raw - non-calibrated"), 
+      z: Leaf(<>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, "Linear acceleration measured by IMU, in the IC coordinate system, raw - non-calibrated") 
     },
     angular_velocity: { 
-      x: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, 
-      y: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, 
-      z: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></> 
+      x: Leaf(<>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, "Angular velocity measured by IMU, in the IC coordinate system, raw - non-calibrated"), 
+      y: Leaf(<>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, "Angular velocity measured by IMU, in the IC coordinate system, raw - non-calibrated"), 
+      z: Leaf(<>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, "Angular velocity measured by IMU, in the IC coordinate system, raw - non-calibrated") 
     },
     magnetic_field: { 
-      x: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, 
-      y: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, 
-      z: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></> 
+      x: Leaf(<>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, "Magnetic field measured by the magnetometer, in the IC coordinate system, raw - non-calibrated"), 
+      y: Leaf(<>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, "Magnetic field measured by the magnetometer, in the IC coordinate system, raw - non-calibrated"), 
+      z: Leaf(<>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, "Magnetic field measured by the magnetometer, in the IC coordinate system, raw - non-calibrated") 
     },
-    light_left: <>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>,
-    light_right: <>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>,
-    current_left: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
-    bus_voltage_left: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
-    power_left: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
-    current_right: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
-    bus_voltage_right: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
-    power_right: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
-    current_supply: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
-    bus_voltage_supply: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
-    power_supply: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
+    light_left: Leaf(<>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>, "Light intensity measured by left sensor in Lux. Warning - only 2Hz refresh rate."),
+    light_right: Leaf(<>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>, "Light intensity measured by right sensor in Lux. Warning - only 2Hz refresh rate."),
+    current_left: Leaf(<>float<UnitInfo>Amps, INA219</UnitInfo></>, "Current flowing through the left H-Bridge (always positive, regardless of motor direction)"),
+    bus_voltage_left: Leaf(<>float<UnitInfo>Volts, INA219</UnitInfo></>, "Voltage of the left H-Bridge"),
+    power_left: Leaf(<>float<UnitInfo>Watts, INA219</UnitInfo></>, "Power consumed by the left motor"),
+    current_right: Leaf(<>float<UnitInfo>Amps, INA219</UnitInfo></>, "Current flowing through the right H-Bridge (always positive, regardless of motor direction)"),
+    bus_voltage_right: Leaf(<>float<UnitInfo>Volts, INA219</UnitInfo></>, "Voltage of the right H-Bridge"),
+    power_right: Leaf(<>float<UnitInfo>Watts, INA219</UnitInfo></>, "Power consumed by the right motor"),
+    current_supply: Leaf(<>float<UnitInfo>Amps, INA219</UnitInfo></>, "Current consumed by ESP32, sensors and LEDs"),
+    bus_voltage_supply: Leaf(<>float<UnitInfo>Volts, INA219</UnitInfo></>, "Supply voltage for logic"),
+    power_supply: Leaf(<>float<UnitInfo>Watts, INA219</UnitInfo></>, "Power consumed by ESP32, sensors and LEDs"),
     stamps: {
-      state: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      distance: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      effort: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      accel: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      gyro: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      mag: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      light_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      light_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      current_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      bus_voltage_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      power_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      current_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      bus_voltage_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      power_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      current_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      bus_voltage_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
-      power_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      state: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of when the state message was sent from the robot"),
+      distance: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      effort: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      accel: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      gyro: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      mag: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      light_left: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      light_right: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      current_left: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      bus_voltage_left: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      power_left: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      current_right: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      bus_voltage_right: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      power_right: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      current_supply: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      bus_voltage_supply: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
+      power_supply: Leaf(<>float<UnitInfo>ms Since Boot</UnitInfo></>, "Timestamp of the measurement"),
     }
   },
   control: {
     effort: { 
-      x: <>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></>, 
-      y: <>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></> 
+      x: Leaf(<>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></>, "How much effort (PWM) to apply to the left motor. -1.0 to 1.0"), 
+      y: Leaf(<>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></>, "How much effort (PWM) to apply to the right motor. -1.0 to 1.0") 
     },
   },
 };
@@ -118,19 +124,27 @@ const ScriptTreeParentNode = ({ path, value, depth, onCopy, copiedPath }: any) =
 const ScriptTreeNode = ({ node, parentPath = "", depth = 0, onCopy, copiedPath }: any) => {
   return (
     <>
-      {Object.entries(node).map(([key, value]) => {
+      {Object.entries(node).map(([key, value]: any) => {
         const path = parentPath ? `${parentPath}.${key}` : key;
-        const isLeaf = typeof value === "string" || (typeof value === "object" && value !== null && "$$typeof" in value);
+        const isLeaf = 
+          typeof value === "string" || 
+          (typeof value === "object" && value !== null && "$$typeof" in value) ||
+          (typeof value === "object" && value !== null && value._isLeaf);
+
         if (isLeaf) {
+          const content = value && value._isLeaf ? value.content : value;
+          const tooltip = value && value._isLeaf ? value.tooltip : undefined;
+
           return (
             <div
               key={path}
+              title={tooltip}
               className="flex items-center justify-between gap-2 py-1 hover:bg-muted/30 transition-colors rounded px-1"
               style={{ paddingLeft: `${(depth * 12) + 16}px` }}
             >
               <div className="flex items-center gap-2 min-w-0">
                 <span className="font-mono text-xs truncate">{key}</span>
-                <span className="text-[10px] text-muted-foreground shrink-0">{value}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">{content}</span>
               </div>
               <Button
                 variant="ghost"
