@@ -1,7 +1,7 @@
 {
   "$schema": "../node_modules/@tauri-apps/cli/config.schema.json",
   "productName": "kabot-hmi",
-  "version": "0.1.1-next",
+  "version": "0.2.0-next",
   "identifier": "io.kabot.hmi",
   "build": {
     "frontendDist": "../out",
@@ -27,7 +27,9 @@
   "bundle": {
     "active": true,
     "targets": "all",
-    "externalBin": ["binaries/kabot_backend"],
+    "externalBin": [
+      "binaries/kabot_backend"
+    ],
     "icon": [
       "icons/32x32.png",
       "icons/128x128.png",
