@@ -12,7 +12,7 @@ import psutil
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import state_control_msg_pb2 as pb2
-from models import RobotState, RobotControl, Vector2, Vector3
+from models import RobotState, RobotControl, Vector2, Vector3, Stamps
 
 app = FastAPI()
 
@@ -48,6 +48,7 @@ def _build_user_callable(code: str):
         'RobotControl': RobotControl,
         'Vector2': Vector2,
         'Vector3': Vector3,
+        'Stamps': Stamps,
     }
     exec(compiled, local_env)
     user_func = local_env.get('control')
@@ -172,25 +173,25 @@ def decode_state(data: bytes) -> RobotState:
     msg = pb2.State()
     msg.ParseFromString(data)
     
-    stamps = {
-        'state': msg.header.stamp,
-        'distance': msg.distance.header.stamp,
-        'effort': msg.effort.header.stamp,
-        'accel': msg.linear_acceleration.header.stamp,
-        'gyro': msg.angular_velocity.header.stamp,
-        'mag': msg.magnetic_field.header.stamp,
-        'light_left': msg.light_left.header.stamp,
-        'light_right': msg.light_right.header.stamp,
-        'current_left': msg.current_left.header.stamp,
-        'bus_voltage_left': msg.bus_voltage_left.header.stamp,
-        'power_left': msg.power_left.header.stamp,
-        'current_right': msg.current_right.header.stamp,
-        'bus_voltage_right': msg.bus_voltage_right.header.stamp,
-        'power_right': msg.power_right.header.stamp,
-        'current_supply': msg.current_supply.header.stamp,
-        'bus_voltage_supply': msg.bus_voltage_supply.header.stamp,
-        'power_supply': msg.power_supply.header.stamp,
-    }
+    stamps = Stamps(
+        state=msg.header.stamp,
+        distance=msg.distance.header.stamp,
+        effort=msg.effort.header.stamp,
+        accel=msg.linear_acceleration.header.stamp,
+        gyro=msg.angular_velocity.header.stamp,
+        mag=msg.magnetic_field.header.stamp,
+        light_left=msg.light_left.header.stamp,
+        light_right=msg.light_right.header.stamp,
+        current_left=msg.current_left.header.stamp,
+        bus_voltage_left=msg.bus_voltage_left.header.stamp,
+        power_left=msg.power_left.header.stamp,
+        current_right=msg.current_right.header.stamp,
+        bus_voltage_right=msg.bus_voltage_right.header.stamp,
+        power_right=msg.power_right.header.stamp,
+        current_supply=msg.current_supply.header.stamp,
+        bus_voltage_supply=msg.bus_voltage_supply.header.stamp,
+        power_supply=msg.power_supply.header.stamp,
+    )
     
     return RobotState(
         distance=msg.distance.state,
@@ -375,7 +376,7 @@ async def udp_loop():
                     'bus_voltage_supply': state.bus_voltage_supply,
                     'power_supply': state.power_supply,
                 },
-                'stamps': state.stamps
+                'stamps': state.stamps.__dict__ if hasattr(state.stamps, '__dict__') else state.stamps
             }
             await _broadcast_json(state_dict)
 

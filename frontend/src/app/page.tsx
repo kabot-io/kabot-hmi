@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft, Copy } from 'lucide-react';
+import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy } from 'lucide-react';
 import { UPlotScope } from "@/components/ui/UPlotScope";
 import { SpinBox } from "@/components/ui/spinbox";
 import { ChannelConfig, ScopeState, TriggerType } from "@/types/scope";
@@ -21,29 +21,136 @@ const lockedFunctionSignature = "def control(state: RobotState, control: RobotCo
 
 type ControlDirection = "up" | "down" | "left" | "right";
 
+const Fraction = ({ top, bottom }: any) => (
+  <span className="inline-flex flex-col items-center justify-center align-middle text-[9px] leading-none mx-0.5 translate-y-[2px]">
+    <span className="border-b border-muted-foreground/50 px-[2px] pb-[1px] w-full text-center">{top}</span>
+    <span className="pt-[1px]">{bottom}</span>
+  </span>
+);
+
+const UnitInfo = ({ children }: any) => (
+  <span className="text-muted-foreground/50 text-[10px] ml-1.5 font-sans normal-case tracking-normal">({children})</span>
+);
+
 const scriptSchema = {
   state: {
-    distance: "float",
-    effort: { x: "float", y: "float" },
-    linear_acceleration: { x: "float", y: "float", z: "float" },
-    angular_velocity: { x: "float", y: "float", z: "float" },
-    magnetic_field: { x: "float", y: "float", z: "float" },
-    light_left: "float",
-    light_right: "float",
-    current_left: "float",
-    bus_voltage_left: "float",
-    power_left: "float",
-    current_right: "float",
-    bus_voltage_right: "float",
-    power_right: "float",
-    current_supply: "float",
-    bus_voltage_supply: "float",
-    power_supply: "float",
+    distance: <>float<UnitInfo>meters, VL53L0X</UnitInfo></>,
+    effort: { 
+      x: <>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></>, 
+      y: <>float<UnitInfo>unitless normalized, current setpoint</UnitInfo></> 
+    },
+    linear_acceleration: { 
+      x: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, 
+      y: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></>, 
+      z: <>float<UnitInfo><Fraction top="m" bottom={<>s<sup>2</sup></>} />, ICM42670L</UnitInfo></> 
+    },
+    angular_velocity: { 
+      x: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, 
+      y: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></>, 
+      z: <>float<UnitInfo><Fraction top="rad" bottom="s" />, ICM42670L</UnitInfo></> 
+    },
+    magnetic_field: { 
+      x: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, 
+      y: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></>, 
+      z: <>float<UnitInfo>Gauss, MMC5603NJ</UnitInfo></> 
+    },
+    light_left: <>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>,
+    light_right: <>float<UnitInfo>LUX, LTR303ALS</UnitInfo></>,
+    current_left: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
+    bus_voltage_left: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
+    power_left: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
+    current_right: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
+    bus_voltage_right: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
+    power_right: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
+    current_supply: <>float<UnitInfo>Amps, INA219</UnitInfo></>,
+    bus_voltage_supply: <>float<UnitInfo>Volts, INA219</UnitInfo></>,
+    power_supply: <>float<UnitInfo>Watts, INA219</UnitInfo></>,
+    stamps: {
+      state: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      distance: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      effort: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      accel: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      gyro: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      mag: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      light_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      light_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      current_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      bus_voltage_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      power_left: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      current_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      bus_voltage_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      power_right: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      current_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      bus_voltage_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+      power_supply: <>float<UnitInfo>ms Since Boot</UnitInfo></>,
+    }
   },
   control: {
-    effort: { x: "float", y: "float" },
+    effort: { 
+      x: <>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></>, 
+      y: <>float<UnitInfo>unitless normalized, DRV8837</UnitInfo></> 
+    },
   },
-} as const;
+};
+
+const ScriptTreeParentNode = ({ path, value, depth, onCopy, copiedPath }: any) => {
+  const [isExpanded, setIsExpanded] = useState(depth === 0);
+
+  return (
+    <div className="py-0.5">
+      <div 
+        className="flex items-center gap-1 cursor-pointer hover:bg-muted/30 py-1 rounded px-1 transition-colors select-none"
+        style={{ paddingLeft: `${depth * 12}px` }}
+        onClick={() => setIsExpanded(!isExpanded)}
+      >
+        {isExpanded ? <ChevronDown className="w-3 h-3 text-muted-foreground shrink-0" /> : <ChevronRight className="w-3 h-3 text-muted-foreground shrink-0" />}
+        <div className="text-[10px] uppercase font-bold tracking-wide text-muted-foreground truncate">{path.split('.').pop()}</div>
+      </div>
+      {isExpanded && (
+        <div className="mt-0.5">
+          <ScriptTreeNode node={value} parentPath={path} depth={depth + 1} onCopy={onCopy} copiedPath={copiedPath} />
+        </div>
+      )}
+    </div>
+  );
+};
+
+const ScriptTreeNode = ({ node, parentPath = "", depth = 0, onCopy, copiedPath }: any) => {
+  return (
+    <>
+      {Object.entries(node).map(([key, value]) => {
+        const path = parentPath ? `${parentPath}.${key}` : key;
+        const isLeaf = typeof value === "string" || (typeof value === "object" && value !== null && "$$typeof" in value);
+        if (isLeaf) {
+          return (
+            <div
+              key={path}
+              className="flex items-center justify-between gap-2 py-1 hover:bg-muted/30 transition-colors rounded px-1"
+              style={{ paddingLeft: `${(depth * 12) + 16}px` }}
+            >
+              <div className="flex items-center gap-2 min-w-0">
+                <span className="font-mono text-xs truncate">{key}</span>
+                <span className="text-[10px] text-muted-foreground shrink-0">{value}</span>
+              </div>
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-5 px-1.5 shrink-0 opacity-50 hover:opacity-100"
+                onClick={() => onCopy(path)}
+                title={`Copy ${path}`}
+              >
+                <Copy className="w-3 h-3 mr-1" />
+                <span className="text-[10px]">{copiedPath === path ? "Copied" : "Copy"}</span>
+              </Button>
+            </div>
+          );
+        }
+
+        return <ScriptTreeParentNode key={path} path={path} value={value} depth={depth} onCopy={onCopy} copiedPath={copiedPath} />;
+      })}
+    </>
+  );
+};
 
 export default function Home() {
   const [logs, setLogs] = useState<string[]>([]);
@@ -597,42 +704,7 @@ export default function Home() {
     }
   };
 
-  const renderScriptTree = (node: any, parentPath = "", depth = 0): React.ReactNode => {
-    return Object.entries(node).map(([key, value]) => {
-      const path = parentPath ? `${parentPath}.${key}` : key;
-      if (typeof value === "string") {
-        return (
-          <div
-            key={path}
-            className="flex items-center justify-between gap-2 py-1"
-            style={{ paddingLeft: `${depth * 12}px` }}
-          >
-            <div className="flex items-center gap-2 min-w-0">
-              <span className="font-mono text-xs truncate">{path}</span>
-              <span className="text-[10px] text-muted-foreground shrink-0">{value}</span>
-            </div>
-            <Button
-              variant="outline"
-              size="sm"
-              className="h-5 px-1.5 shrink-0"
-              onClick={() => copyPath(path)}
-              title={`Copy ${path}`}
-            >
-              <Copy className="w-3 h-3 mr-1" />
-              <span className="text-[10px]">{copiedPath === path ? "Copied" : "Copy"}</span>
-            </Button>
-          </div>
-        );
-      }
 
-      return (
-        <div key={path} className="py-1" style={{ paddingLeft: `${depth * 12}px` }}>
-          <div className="text-[10px] uppercase font-bold tracking-wide text-muted-foreground">{path}</div>
-          <div>{renderScriptTree(value, path, depth + 1)}</div>
-        </div>
-      );
-    });
-  };
 
   useEffect(() => {
     const keyToDirection: Record<string, ControlDirection> = {
@@ -640,10 +712,19 @@ export default function Home() {
       ArrowDown: "down",
       ArrowLeft: "left",
       ArrowRight: "right",
+      h: "left",
+      H: "left",
+      j: "down",
+      J: "down",
+      k: "up",
+      K: "up",
+      l: "right",
+      L: "right",
     };
 
     const onKeyDown = (event: KeyboardEvent) => {
-      if (activeWorkspace !== "scope") return;
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
+      
       const direction = keyToDirection[event.key];
       if (!direction) return;
       event.preventDefault();
@@ -653,6 +734,8 @@ export default function Home() {
     };
 
     const onKeyUp = (event: KeyboardEvent) => {
+      if (document.activeElement instanceof HTMLInputElement || document.activeElement instanceof HTMLTextAreaElement) return;
+      
       const direction = keyToDirection[event.key];
       if (!direction) return;
       event.preventDefault();
@@ -933,45 +1016,52 @@ export default function Home() {
             })}
           </SelectContent>
         </Select>
-        <Button
-          size="sm"
-          variant="default"
-          className="h-8 px-2"
-          disabled={
-            !selectedRobotSerial || 
-            discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial)?.is_claimed ||
-            isAutoScanning
+        {(() => {
+          const robot = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
+          const isClaimedByUs = robot?.is_claimed_by_us;
+          const isClaimedByOther = robot?.is_claimed && !isClaimedByUs;
+
+          if (isClaimedByUs) {
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                className="h-8 w-20 px-2"
+                onClick={() => {
+                  if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    setConnectedRobot(null);
+                    wsRef.current.send(JSON.stringify({ type: "release_robot" }));
+                  }
+                }}
+                title="Release Claimed Robot"
+              >
+                Unclaim
+              </Button>
+            );
+          } else {
+            return (
+              <Button
+                size="sm"
+                variant="default"
+                className="h-8 w-20 px-2"
+                disabled={!selectedRobotSerial || isClaimedByOther || isAutoScanning}
+                onClick={() => {
+                  if (robot && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                    setConnectedRobot(robot);
+                    wsRef.current.send(JSON.stringify({ 
+                      type: "claim_robot", 
+                      ip: robot.ip, 
+                      port: robot.port 
+                    }));
+                  }
+                }}
+                title={isClaimedByOther ? `Robot needs to be unclaimed by ${robot.claimed_by_ip} first, or restarted` : "Claim Selected Robot"}
+              >
+                Claim
+              </Button>
+            );
           }
-          onClick={() => {
-            const robot = discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
-            if (robot && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              setConnectedRobot(robot);
-              wsRef.current.send(JSON.stringify({ 
-                type: "claim_robot", 
-                ip: robot.ip, 
-                port: robot.port 
-              }));
-            }
-          }}
-          title="Claim Selected Robot"
-        >
-          Claim
-        </Button>
-        <Button
-          size="sm"
-          variant="outline"
-          className="h-8 px-2"
-          disabled={!connectedRobot}
-          onClick={() => {
-            if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-              setConnectedRobot(null);
-              wsRef.current.send(JSON.stringify({ type: "release_robot" }));
-            }
-          }}
-          title="Release Claimed Robot"
-        >
-          Unclaim
-        </Button>
+        })()}
         <Button
           size="sm"
           variant="outline"
@@ -1001,6 +1091,61 @@ export default function Home() {
       </div>
     );
   };
+
+  const renderManualControls = () => {
+    const isEnabled = connectedRobot !== null;
+    return (
+        <div className={`flex items-center gap-1.5 shrink-0 transition-opacity ${!isEnabled ? 'opacity-30 pointer-events-none' : ''}`}>
+            <span className="text-[9px] uppercase font-bold text-muted-foreground tracking-wider">Manual</span>
+            <Button
+              variant={manualDirectionsUI.has("left") ? "default" : "outline"}
+              size="icon"
+              className="h-5 w-5"
+              title="Left (Arrow Left)"
+              onMouseDown={() => handleManualDirectionPress("left")}
+              onMouseUp={() => handleManualDirectionRelease("left")}
+              onMouseLeave={() => handleManualDirectionRelease("left")}
+            >
+              <ChevronLeft className="w-2.5 h-2.5" />
+            </Button>
+            <Button
+              variant={manualDirectionsUI.has("down") ? "default" : "outline"}
+              size="icon"
+              className="h-5 w-5"
+              title="Backward (Arrow Down)"
+              onMouseDown={() => handleManualDirectionPress("down")}
+              onMouseUp={() => handleManualDirectionRelease("down")}
+              onMouseLeave={() => handleManualDirectionRelease("down")}
+            >
+              <ChevronDown className="w-2.5 h-2.5" />
+            </Button>
+            <Button
+              variant={manualDirectionsUI.has("up") ? "default" : "outline"}
+              size="icon"
+              className="h-5 w-5"
+              title="Forward (Arrow Up)"
+              onMouseDown={() => handleManualDirectionPress("up")}
+              onMouseUp={() => handleManualDirectionRelease("up")}
+              onMouseLeave={() => handleManualDirectionRelease("up")}
+            >
+              <ChevronUp className="w-2.5 h-2.5" />
+            </Button>
+            <Button
+              variant={manualDirectionsUI.has("right") ? "default" : "outline"}
+              size="icon"
+              className="h-5 w-5"
+              title="Right (Arrow Right)"
+              onMouseDown={() => handleManualDirectionPress("right")}
+              onMouseUp={() => handleManualDirectionRelease("right")}
+              onMouseLeave={() => handleManualDirectionRelease("right")}
+            >
+              <ArrowRight className="w-2.5 h-2.5" />
+            </Button>
+        </div>
+    );
+  };
+
+  const displayRobot = connectedRobot || discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground text-sm font-sans">
@@ -1037,7 +1182,7 @@ export default function Home() {
         
         {/* Contextual Toolbar */}
         {activeWorkspace === "code" && (
-            <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
+            <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background w-full">
                 {!isRunning ? (
                   <>
                   <Button size="sm" variant="default" className="font-bold w-[140px]" onClick={handleRun} disabled={isRunning || robotConnectionStatus !== 'connected'} title="Run script"><Play className="w-4 h-4 mr-2" /> Run script</Button>
@@ -1073,6 +1218,11 @@ export default function Home() {
                 >
                   Load
                 </Button>
+                <div className="w-px h-6 bg-border mx-2" />
+                <div className="flex-1" />
+                <div className="w-px h-6 bg-border mx-2" />
+                {renderManualControls()}
+                <div className="w-px h-6 bg-border mx-2" />
                 {renderRobotSelector()}
             </div>
         )}
@@ -1160,62 +1310,7 @@ export default function Home() {
                     </div>
 
                     <div className="flex items-center gap-2 px-3 border-l border-border/50 shrink-0">
-                        <div className="flex items-center gap-1.5">
-                            <span className="text-[9px] uppercase font-bold text-muted-foreground tracking-wider">Manual</span>
-                            <Button
-                              variant={manualDirectionsUI.has("up") ? "default" : "outline"}
-                              size="icon"
-                              className="h-5 w-5"
-                              title="Forward (Arrow Up)"
-                              onMouseDown={() => handleManualDirectionPress("up")}
-                              onMouseUp={() => handleManualDirectionRelease("up")}
-                              onMouseLeave={() => handleManualDirectionRelease("up")}
-                            >
-                              <ChevronUp className="w-2.5 h-2.5" />
-                            </Button>
-                            <Button
-                              variant={manualDirectionsUI.has("left") ? "default" : "outline"}
-                              size="icon"
-                              className="h-5 w-5"
-                              title="Left (Arrow Left)"
-                              onMouseDown={() => handleManualDirectionPress("left")}
-                              onMouseUp={() => handleManualDirectionRelease("left")}
-                              onMouseLeave={() => handleManualDirectionRelease("left")}
-                            >
-                              <ChevronLeft className="w-2.5 h-2.5" />
-                            </Button>
-                            <Button
-                              variant="outline"
-                              size="icon"
-                              className="h-5 w-5"
-                              title="Release"
-                              onClick={clearManualDirections}
-                            >
-                              <Square className="w-2 h-2" />
-                            </Button>
-                            <Button
-                              variant={manualDirectionsUI.has("right") ? "default" : "outline"}
-                              size="icon"
-                              className="h-5 w-5"
-                              title="Right (Arrow Right)"
-                              onMouseDown={() => handleManualDirectionPress("right")}
-                              onMouseUp={() => handleManualDirectionRelease("right")}
-                              onMouseLeave={() => handleManualDirectionRelease("right")}
-                            >
-                              <ArrowRight className="w-2.5 h-2.5" />
-                            </Button>
-                            <Button
-                              variant={manualDirectionsUI.has("down") ? "default" : "outline"}
-                              size="icon"
-                              className="h-5 w-5"
-                              title="Backward (Arrow Down)"
-                              onMouseDown={() => handleManualDirectionPress("down")}
-                              onMouseUp={() => handleManualDirectionRelease("down")}
-                              onMouseLeave={() => handleManualDirectionRelease("down")}
-                            >
-                              <ChevronDown className="w-2.5 h-2.5" />
-                            </Button>
-                        </div>
+                        {renderManualControls()}
                     </div>
 
                 </div>
@@ -1223,9 +1318,14 @@ export default function Home() {
         )}
 
         {activeWorkspace === "firmware" && (
-            <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background">
-                <Button size="sm" variant="outline" className="font-bold" onClick={() => alert("This functionality will be available soon. Sorry.")}><Unplug className="w-4 h-4 mr-2" /> Connect Robot</Button>
+            <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background w-full">
                 <Button size="sm" variant="default" className="font-bold" onClick={() => alert("This functionality will be available soon. Sorry.")}><Download className="w-4 h-4 mr-2" /> Firmware Update</Button>
+                <div className="w-px h-6 bg-border mx-2" />
+                <div className="flex-1" />
+                <div className="w-px h-6 bg-border mx-2" />
+                {renderManualControls()}
+                <div className="w-px h-6 bg-border mx-2" />
+                {renderRobotSelector()}
             </div>
         )}
 
@@ -1265,8 +1365,8 @@ export default function Home() {
                             <span className="text-[10px] uppercase font-bold tracking-wider text-muted-foreground">Script Paths</span>
                             <span className="text-[10px] text-muted-foreground">RobotState and RobotControl</span>
                           </div>
-                          <div className="flex-1 min-h-0 overflow-y-auto p-2">
-                            {renderScriptTree(scriptSchema)}
+                          <div className="p-4 flex-1 overflow-y-auto">
+                            <ScriptTreeNode node={scriptSchema} onCopy={copyPath} copiedPath={copiedPath} />
                           </div>
                         </div>
                       </ResizablePanel>
@@ -1357,47 +1457,42 @@ export default function Home() {
 
                         {/* Robot Status */}
                         <div className="flex flex-col gap-3">
-                            <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground border-b pb-1">Robot Status</h3>
-                            
-                            <div className="grid grid-cols-2 gap-4 text-sm">
-                                <div className="flex flex-col">
-                                    <span className="text-muted-foreground text-xs mb-1">Robot Connection</span>
-                                    <div className="w-fit">{renderRobotSelector()}</div>
-                                </div>
+                            <div className="flex items-center justify-between border-b pb-1">
+                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Robot Status</h3>
                             </div>
                             
-                            {connectedRobot ? (
+                            {displayRobot ? (
                                 <div className="grid grid-cols-2 gap-4 text-sm mt-2">
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">IP Address</span>
-                                        <span className="font-medium mt-1 font-mono">{connectedRobot.ip}</span>
+                                        <span className="font-medium mt-1 font-mono">{displayRobot.ip}</span>
                                     </div>
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">Serial Number</span>
-                                        <span className="font-medium mt-1 font-mono">{connectedRobot.serial}</span>
+                                        <span className="font-medium mt-1 font-mono">{displayRobot.serial}</span>
                                     </div>
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">Human Name</span>
-                                        <span className="font-medium mt-1">{connectedRobot.human_name || "N/A"}</span>
+                                        <span className="font-medium mt-1">{displayRobot.human_name || "N/A"}</span>
                                     </div>
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">Firmware Version</span>
-                                        <span className="font-medium mt-1">{connectedRobot.firmware_version || "N/A"}</span>
+                                        <span className="font-medium mt-1">{displayRobot.firmware_version || "N/A"}</span>
                                     </div>
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">Control Port</span>
-                                        <span className="font-medium mt-1">{connectedRobot.port}</span>
+                                        <span className="font-medium mt-1">{displayRobot.port}</span>
                                     </div>
                                     <div className="flex flex-col">
                                         <span className="text-muted-foreground text-xs">Claimed Status</span>
                                         <span className="font-medium mt-1">
-                                            {connectedRobot.is_claimed_by_us ? "Claimed by us" : 
-                                             connectedRobot.is_claimed ? `Claimed by ${connectedRobot.claimed_by_ip}` : "Unclaimed"}
+                                            {displayRobot.is_claimed_by_us ? "Claimed by us" : 
+                                             displayRobot.is_claimed ? `Claimed by ${displayRobot.claimed_by_ip}` : "Unclaimed"}
                                         </span>
                                     </div>
                                 </div>
                             ) : (
-                                <div className="text-sm text-muted-foreground italic mt-2">No robot is currently connected.</div>
+                                <div className="text-sm text-muted-foreground italic mt-2">No robot is currently selected or connected.</div>
                             )}
                         </div>
 
