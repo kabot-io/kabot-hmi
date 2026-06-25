@@ -12,11 +12,20 @@ import json, subprocess, re
 try:
     desc = subprocess.check_output(['git', 'describe', '--tags', '--always']).decode().strip()
     desc = desc.lstrip('v')
-    if '-' in desc:
-        base = desc.split('-')[0]
-        ver = f"{base}-next"
+    
+    if '.' in desc:
+        if '-' in desc:
+            base = desc.split('-')[0]
+            ver = f"{base}-next"
+        else:
+            ver = desc
     else:
-        ver = desc
+        # Fallback if no tags are found (git returns just a commit hash)
+        ver = f"0.0.0-{desc}"
+        
+    # Final safety check to ensure it's a valid SemVer format
+    if not re.match(r'^\d+\.\d+\.\d+', ver):
+        ver = "0.0.0-unknown"
 
     print(f"=== Auto-updating version to {ver} ===")
 
