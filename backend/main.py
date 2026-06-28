@@ -259,10 +259,35 @@ async def flash_firmware(ip: str):
             
             await asyncio.sleep(2.0)
 
-            await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
             try:
                 import subprocess
                 import json
+
+                # Pre-flight check: fetch firmware status
+                await _broadcast_log('HMI', f"Fetching firmware status from {ip} before flashing...")
+                proc_fetch = await asyncio.create_subprocess_exec(
+                    sys.executable, "smp_fetcher.py", ip,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout_fetch, stderr_fetch = await proc_fetch.communicate()
+                
+                if proc_fetch.returncode != 0:
+                    raise RuntimeError("Status fetch failed")
+                    
+                output_fetch = stdout_fetch.decode().strip()
+                try:
+                    result_fetch = json.loads(output_fetch)
+                    if "error" in result_fetch:
+                        raise RuntimeError("Status fetch failed")
+                    if "data" in result_fetch:
+                        await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result_fetch["data"]})
+                    else:
+                        raise RuntimeError("Status fetch failed")
+                except json.JSONDecodeError:
+                    raise RuntimeError("Status fetch failed")
+
+                await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
                 import sys
                 
                 fw_path = "/home/kpo/git/kabot-io/kabot-zephyr/build/esp32s3_devkitc/app/zephyr/zephyr.signed.bin"
@@ -306,7 +331,10 @@ async def flash_firmware(ip: str):
                 if len(err_str) > 200:
                     err_str = err_str[:200] + '...'
                 await _broadcast_log('HMI', f"SMP flash failed for {ip}: {err_str}")
-                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': 'Flashing failed'})
+                
+                # Forward specific RuntimeError messages (like "Status fetch failed"), otherwise use generic
+                msg = str(e) if isinstance(e, RuntimeError) else 'Flashing failed'
+                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': msg})
             finally:
                 smp_in_progress = False
                 
