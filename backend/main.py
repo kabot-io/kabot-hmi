@@ -203,7 +203,7 @@ async def fetch_firmware_status(ip: str):
                 if len(err_str) > 200:
                     err_str = err_str[:200] + '...'
                 await _broadcast_log('HMI', f"SMP fetch failed for {ip}: {err_str}")
-                await _broadcast_json({'type': 'firmware_status_error', 'ip': ip, 'message': f'SMP fetch failed: {err_str}'})
+                await _broadcast_json({'type': 'firmware_status_error', 'ip': ip, 'message': 'Status fetch failed'})
             finally:
                 # Re-enable background tasks
                 smp_in_progress = False
@@ -306,7 +306,7 @@ async def flash_firmware(ip: str):
                 if len(err_str) > 200:
                     err_str = err_str[:200] + '...'
                 await _broadcast_log('HMI', f"SMP flash failed for {ip}: {err_str}")
-                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': f'SMP flash failed: {err_str}'})
+                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': 'Flashing failed'})
             finally:
                 smp_in_progress = False
                 
