@@ -1218,6 +1218,9 @@ export default function Home() {
 
   const displayRobot = connectedRobot || discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
   const activeSmpIp = manualSmpIp || displayRobot?.ip;
+  const hasUnconfirmedActiveSlot = activeSmpIp && firmwareStatusMap[activeSmpIp]
+    ? firmwareStatusMap[activeSmpIp].some((s: any) => s.active && !s.confirmed)
+    : false;
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground text-sm font-sans">
@@ -1391,28 +1394,30 @@ export default function Home() {
 
         {activeWorkspace === "firmware" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background w-full">
-                <Button 
-                    size="sm" 
-                    className="w-48 font-semibold"
-                    disabled={isFlashingFirmware || !(manualSmpIp || displayRobot?.ip)}
-                    onClick={() => {
-                        const targetIp = manualSmpIp || displayRobot?.ip;
-                        if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-                            setIsFlashingFirmware(true);
-                            setFlashPhase("Updating firmware status");
-                            setFlashProgress(0);
-                            setFlashError("");
-                            wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp }));
-                        }
-                    }}
-                >
-                    <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
-                    {isFlashingFirmware ? (
-                        flashPhase === "Uploading firmware" && flashProgress > 0 
-                            ? `Uploading firmware... ${flashProgress.toFixed(1)}%` 
-                            : flashPhase
-                    ) : "Firmware Update"}
-                </Button>
+                <div title={hasUnconfirmedActiveSlot ? "Please confirm the active slot before updating firmware." : ""}>
+                    <Button 
+                        size="sm" 
+                        className="w-48 font-semibold"
+                        disabled={isFlashingFirmware || !activeSmpIp || hasUnconfirmedActiveSlot}
+                        onClick={() => {
+                            const targetIp = manualSmpIp || displayRobot?.ip;
+                            if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                                setIsFlashingFirmware(true);
+                                setFlashPhase("Updating firmware status");
+                                setFlashProgress(0);
+                                setFlashError("");
+                                wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp }));
+                            }
+                        }}
+                    >
+                        <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
+                        {isFlashingFirmware ? (
+                            flashPhase === "Uploading firmware" && flashProgress > 0 
+                                ? `Uploading firmware... ${flashProgress.toFixed(1)}%` 
+                                : flashPhase
+                        ) : "Firmware Update"}
+                    </Button>
+                </div>
                 
                 {isFlashingFirmware && (
                     <div className="flex-1 max-w-md mx-4 bg-muted rounded-full h-3 overflow-hidden">
