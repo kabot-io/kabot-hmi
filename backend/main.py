@@ -262,6 +262,7 @@ async def flash_firmware(ip: str):
             try:
                 import subprocess
                 import json
+                import sys
 
                 # Pre-flight check: fetch firmware status
                 await _broadcast_log('HMI', f"Fetching firmware status from {ip} before flashing...")
@@ -291,7 +292,6 @@ async def flash_firmware(ip: str):
                 await asyncio.sleep(0.5)
 
                 await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
-                import sys
                 
                 fw_path = "/home/kpo/git/kabot-io/kabot-zephyr/build/esp32s3_devkitc/app/zephyr/zephyr.signed.bin"
                 
