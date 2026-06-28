@@ -1221,6 +1221,8 @@ export default function Home() {
   const hasUnconfirmedActiveSlot = activeSmpIp && firmwareStatusMap[activeSmpIp]
     ? firmwareStatusMap[activeSmpIp].some((s: any) => s.active && !s.confirmed)
     : false;
+  
+  const isSmpActionInProgress = isFetchingFirmware || isFlashingFirmware || bootingPhase !== "";
 
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground text-sm font-sans">
@@ -1398,7 +1400,7 @@ export default function Home() {
                     <Button 
                         size="sm" 
                         className="w-48 font-semibold"
-                        disabled={isFlashingFirmware || !activeSmpIp || hasUnconfirmedActiveSlot}
+                        disabled={isSmpActionInProgress || !activeSmpIp || hasUnconfirmedActiveSlot}
                         onClick={() => {
                             const targetIp = manualSmpIp || displayRobot?.ip;
                             if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
@@ -1443,7 +1445,7 @@ export default function Home() {
                         }
                     }}
                     title="Refresh Firmware Status"
-                    disabled={isFetchingFirmware || isFlashingFirmware || !(manualSmpIp || displayRobot?.ip)}
+                    disabled={isSmpActionInProgress || !(manualSmpIp || displayRobot?.ip)}
                 >
                     <RefreshCw className={`w-4 h-4 ${isFetchingFirmware ? 'animate-spin text-muted-foreground' : ''}`} />
                 </Button>
@@ -1650,7 +1652,7 @@ export default function Home() {
                                                     {slot.bootable && !slot.active && (
                                                         <Button 
                                                             size="sm" 
-                                                            disabled={isFetchingFirmware || isFlashingFirmware || (bootingSlotHash === slot.hash && bootingPhase !== "")}
+                                                            disabled={isSmpActionInProgress}
                                                             onClick={() => {
                                                                 if (activeSmpIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                                                                     setBootingSlotHash(slot.hash);
@@ -1667,7 +1669,7 @@ export default function Home() {
                                                     {slot.bootable && slot.active && !slot.confirmed && (
                                                         <Button 
                                                             size="sm" 
-                                                            disabled={isFetchingFirmware || isFlashingFirmware}
+                                                            disabled={isSmpActionInProgress}
                                                             onClick={() => {
                                                                 if (activeSmpIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                                                                     wsRef.current.send(JSON.stringify({ type: "confirm_slot", ip: activeSmpIp, hash: slot.hash }));
