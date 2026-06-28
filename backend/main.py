@@ -273,19 +273,22 @@ async def flash_firmware(ip: str):
                 stdout_fetch, stderr_fetch = await proc_fetch.communicate()
                 
                 if proc_fetch.returncode != 0:
-                    raise RuntimeError("Status fetch failed")
+                    raise RuntimeError(f"Status fetch failed (exit {proc_fetch.returncode}): {stderr_fetch.decode()}")
                     
                 output_fetch = stdout_fetch.decode().strip()
                 try:
                     result_fetch = json.loads(output_fetch)
                     if "error" in result_fetch:
-                        raise RuntimeError("Status fetch failed")
+                        raise RuntimeError(f"Status fetch failed: {result_fetch['error']}")
                     if "data" in result_fetch:
                         await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result_fetch["data"]})
                     else:
-                        raise RuntimeError("Status fetch failed")
+                        raise RuntimeError("Status fetch failed: no data")
                 except json.JSONDecodeError:
-                    raise RuntimeError("Status fetch failed")
+                    raise RuntimeError(f"Status fetch failed (invalid JSON): {output_fetch}")
+
+                # Give Zephyr UDP stack a moment to clean up before opening a new socket
+                await asyncio.sleep(0.5)
 
                 await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
                 import sys
@@ -332,8 +335,10 @@ async def flash_firmware(ip: str):
                     err_str = err_str[:200] + '...'
                 await _broadcast_log('HMI', f"SMP flash failed for {ip}: {err_str}")
                 
-                # Forward specific RuntimeError messages (like "Status fetch failed"), otherwise use generic
-                msg = str(e) if isinstance(e, RuntimeError) else 'Flashing failed'
+                # Forward the actual exception message so it shows in the UI
+                msg = str(e)
+                if len(msg) > 100:
+                    msg = msg[:97] + '...'
                 await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': msg})
             finally:
                 smp_in_progress = False
