@@ -197,10 +197,13 @@ async def fetch_firmware_status(ip: str):
                     await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result["data"]})
                     await _broadcast_log('HMI', f"Firmware status fetched successfully from {ip}")
                 else:
-                    raise ValueError("Unexpected response format from SMP fetcher")
+                    await _broadcast_log('HMI', f"Firmware status fetch successfully completed for {ip}")
             except Exception as e:
-                await _broadcast_log('HMI', f"SMP connection failed for {ip}: {e}")
-                await _broadcast_json({'type': 'firmware_status_error', 'ip': ip, 'message': 'SMP connection failed'})
+                err_str = repr(e)
+                if len(err_str) > 200:
+                    err_str = err_str[:200] + '...'
+                await _broadcast_log('HMI', f"SMP fetch failed for {ip}: {err_str}")
+                await _broadcast_json({'type': 'firmware_status_error', 'ip': ip, 'message': f'SMP fetch failed: {err_str}'})
             finally:
                 # Re-enable background tasks
                 smp_in_progress = False
@@ -299,8 +302,11 @@ async def flash_firmware(ip: str):
                 await _broadcast_log('HMI', f"Firmware flash completed successfully for {ip}")
                 await _broadcast_json({'type': 'firmware_flash_success', 'ip': ip})
             except Exception as e:
-                await _broadcast_log('HMI', f"SMP flash failed for {ip}: {e}")
-                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': f'SMP flash failed: {e}'})
+                err_str = repr(e)
+                if len(err_str) > 200:
+                    err_str = err_str[:200] + '...'
+                await _broadcast_log('HMI', f"SMP flash failed for {ip}: {err_str}")
+                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': f'SMP flash failed: {err_str}'})
             finally:
                 smp_in_progress = False
                 

@@ -1381,8 +1381,7 @@ export default function Home() {
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background w-full">
                 <Button 
                     size="sm" 
-                    variant="default" 
-                    className="font-bold" 
+                    className="w-48 font-semibold"
                     disabled={isFlashingFirmware || !(manualSmpIp || displayRobot?.ip)}
                     onClick={() => {
                         const targetIp = manualSmpIp || displayRobot?.ip;
