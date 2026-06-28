@@ -1392,7 +1392,7 @@ export default function Home() {
                         const targetIp = manualSmpIp || displayRobot?.ip;
                         if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                             setIsFlashingFirmware(true);
-                            setFlashPhase("updating firmware status");
+                            setFlashPhase("Updating firmware status");
                             setFlashProgress(0);
                             setFlashError("");
                             wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp }));
@@ -1401,8 +1401,8 @@ export default function Home() {
                 >
                     <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
                     {isFlashingFirmware ? (
-                        flashPhase === "uploading firmware" && flashProgress > 0 
-                            ? `Flashing... ${flashProgress.toFixed(1)}%` 
+                        flashPhase === "Uploading firmware" && flashProgress > 0 
+                            ? `Uploading firmware... ${flashProgress.toFixed(1)}%` 
                             : flashPhase
                     ) : "Firmware Update"}
                 </Button>

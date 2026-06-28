@@ -265,7 +265,7 @@ async def flash_firmware(ip: str):
                 import sys
 
                 # Pre-flight check: fetch firmware status
-                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'updating firmware status'})
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Updating firmware status'})
                 await _broadcast_log('HMI', f"Fetching firmware status from {ip} before flashing...")
                 proc_fetch = await asyncio.create_subprocess_exec(
                     sys.executable, "smp_fetcher.py", ip,
@@ -292,7 +292,7 @@ async def flash_firmware(ip: str):
                 # Give Zephyr UDP stack a moment to clean up before opening a new socket
                 await asyncio.sleep(0.5)
 
-                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'uploading firmware'})
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Uploading firmware'})
                 await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
                 
                 fw_path = "/home/kpo/git/kabot-io/kabot-zephyr/build/esp32s3_devkitc/app/zephyr/zephyr.signed.bin"
@@ -330,7 +330,7 @@ async def flash_firmware(ip: str):
                     raise Exception(f"Subprocess failed: {stderr.decode()}")
                     
                 await asyncio.sleep(0.5)
-                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'updating firmware status'})
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Updating firmware status'})
                 
                 # Post-flight fetch to get updated slots
                 proc_fetch_post = await asyncio.create_subprocess_exec(
