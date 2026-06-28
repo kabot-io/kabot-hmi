@@ -265,6 +265,7 @@ async def flash_firmware(ip: str):
                 import sys
 
                 # Pre-flight check: fetch firmware status
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'updating firmware status'})
                 await _broadcast_log('HMI', f"Fetching firmware status from {ip} before flashing...")
                 proc_fetch = await asyncio.create_subprocess_exec(
                     sys.executable, "smp_fetcher.py", ip,
@@ -291,6 +292,7 @@ async def flash_firmware(ip: str):
                 # Give Zephyr UDP stack a moment to clean up before opening a new socket
                 await asyncio.sleep(0.5)
 
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'uploading firmware'})
                 await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
                 
                 fw_path = "/home/kpo/git/kabot-io/kabot-zephyr/build/esp32s3_devkitc/app/zephyr/zephyr.signed.bin"
@@ -326,6 +328,25 @@ async def flash_firmware(ip: str):
                 if proc.returncode != 0:
                     stderr = await proc.stderr.read()
                     raise Exception(f"Subprocess failed: {stderr.decode()}")
+                    
+                await asyncio.sleep(0.5)
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'updating firmware status'})
+                
+                # Post-flight fetch to get updated slots
+                proc_fetch_post = await asyncio.create_subprocess_exec(
+                    sys.executable, "smp_fetcher.py", ip,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE
+                )
+                stdout_fetch_post, stderr_fetch_post = await proc_fetch_post.communicate()
+                if proc_fetch_post.returncode == 0:
+                    output_fetch_post = stdout_fetch_post.decode().strip()
+                    try:
+                        result_fetch_post = json.loads(output_fetch_post)
+                        if "data" in result_fetch_post:
+                            await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result_fetch_post["data"]})
+                    except:
+                        pass
                     
                 await _broadcast_log('HMI', f"Firmware flash completed successfully for {ip}")
                 await _broadcast_json({'type': 'firmware_flash_success', 'ip': ip})

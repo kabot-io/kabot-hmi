@@ -292,6 +292,7 @@ export default function Home() {
   const [isFetchingFirmware, setIsFetchingFirmware] = useState(false);
   const [manualSmpIp, setManualSmpIp] = useState("");
   const [isFlashingFirmware, setIsFlashingFirmware] = useState(false);
+  const [flashPhase, setFlashPhase] = useState("");
   const [flashProgress, setFlashProgress] = useState(0);
   const [flashError, setFlashError] = useState("");
 
@@ -545,6 +546,10 @@ export default function Home() {
         } else if (msg.type === "firmware_flash_progress") {
           setIsFlashingFirmware(true);
           setFlashProgress(msg.progress);
+          setFlashError("");
+        } else if (msg.type === "firmware_flash_phase") {
+          setIsFlashingFirmware(true);
+          setFlashPhase(msg.phase);
           setFlashError("");
         } else if (msg.type === "firmware_flash_success") {
           setIsFlashingFirmware(false);
@@ -1387,6 +1392,7 @@ export default function Home() {
                         const targetIp = manualSmpIp || displayRobot?.ip;
                         if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
                             setIsFlashingFirmware(true);
+                            setFlashPhase("updating firmware status");
                             setFlashProgress(0);
                             setFlashError("");
                             wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp }));
@@ -1394,7 +1400,11 @@ export default function Home() {
                     }}
                 >
                     <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
-                    {isFlashingFirmware ? `Flashing... ${flashProgress.toFixed(1)}%` : "Firmware Update"}
+                    {isFlashingFirmware ? (
+                        flashPhase === "uploading firmware" && flashProgress > 0 
+                            ? `Flashing... ${flashProgress.toFixed(1)}%` 
+                            : flashPhase
+                    ) : "Firmware Update"}
                 </Button>
                 
                 {isFlashingFirmware && (
