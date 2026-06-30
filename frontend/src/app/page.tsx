@@ -1547,7 +1547,7 @@ export default function Home() {
                     <div className="w-64 mx-4">
                         <Select 
                             value={selectedReleaseUrl} 
-                            onValueChange={setSelectedReleaseUrl}
+                            onValueChange={(val) => { if (val) setSelectedReleaseUrl(val); }}
                             disabled={isSmpActionInProgress || isFetchingFirmware || githubReleases.length === 0}
                         >
                             <SelectTrigger className="w-full">
