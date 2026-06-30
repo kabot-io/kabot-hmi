@@ -13,6 +13,9 @@ from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 import state_control_msg_pb2 as pb2
 from models import RobotState, RobotControl, Vector2, Vector3, Stamps
+from smpclient import SMPClient
+from smpclient.transport.udp import SMPUDPTransport
+from smpclient.requests.image_management import ImageStatesRead
 
 app = FastAPI()
 
@@ -121,8 +124,338 @@ async def _broadcast_json(payload: dict):
     for conn in stale:
         if conn in active_connections:
             active_connections.remove(conn)
+_firmware_fetch_locks: dict[str, asyncio.Lock] = {}
+_discovery_lock = asyncio.Lock()
+smp_in_progress = False
 
+import smp_fetcher
+import smp_action
+import smp_uploader
 
+def get_firmware_fetch_lock(ip: str) -> asyncio.Lock:
+    if ip not in _firmware_fetch_locks:
+        _firmware_fetch_locks[ip] = asyncio.Lock()
+    return _firmware_fetch_locks[ip]
+
+async def fetch_firmware_status(ip: str):
+    global udp_target_ip, smp_in_progress
+    lock = get_firmware_fetch_lock(ip)
+        
+    if lock.locked():
+        await _broadcast_log('HMI', f"Firmware fetch already in progress for {ip}, skipping")
+        return
+
+    async with lock:
+        async with _discovery_lock:
+            # Check if this robot is currently claimed
+            was_claimed = (udp_target_ip == ip)
+            if was_claimed:
+                await _broadcast_log('HMI', f"Temporarily releasing {ip} to safely fetch firmware via SMP")
+                try:
+                    rel_req = pb2.Bonjour()
+                    rel_req.hmi_port = UDP_STATE_PORT
+                    rel_req.release = True
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rel_sock:
+                        rel_sock.bind(("0.0.0.0", 0))
+                        rel_sock.settimeout(0.5)
+                        rel_sock.sendto(rel_req.SerializeToString(), (ip, 30012))
+                        try:
+                            rel_sock.recvfrom(2048)
+                        except TimeoutError:
+                            pass
+                except Exception as e:
+                    await _broadcast_log('HMI', f"Error during temp release: {e}")
+                
+                # Pause background pings immediately
+                udp_target_ip = None
+                
+            # Block ALL other background tasks (discovery, pings, loop)
+            smp_in_progress = True
+            
+            # Wait a long time for the robot's network stack to completely clear out old telemetry
+            await asyncio.sleep(2.0)
+
+            await _broadcast_log('HMI', f"Fetching firmware status from {ip}")
+            try:
+                result = await smp_fetcher.fetch_firmware_status(ip)
+                if "data" in result:
+                    await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result["data"]})
+                    await _broadcast_log('HMI', f"Firmware status fetched successfully from {ip}")
+                else:
+                    await _broadcast_log('HMI', f"Firmware status fetch successfully completed for {ip}")
+            except Exception as e:
+                err_str = repr(e)
+                if len(err_str) > 200:
+                    err_str = err_str[:200] + '...'
+                await _broadcast_log('HMI', f"SMP fetch failed for {ip}: {err_str}")
+                await _broadcast_json({'type': 'firmware_status_error', 'ip': ip, 'message': 'Status fetch failed'})
+            finally:
+                # Re-enable background tasks
+                smp_in_progress = False
+                
+                # Reclaim if we temporarily released it
+                if was_claimed:
+                    await asyncio.sleep(0.5)
+                    await _broadcast_log('HMI', f"Re-claiming {ip} after firmware fetch")
+                    udp_target_ip = ip
+                    try:
+                        claim_req = pb2.Bonjour()
+                        claim_req.hmi_port = UDP_STATE_PORT
+                        claim_req.claim = True
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as claim_sock:
+                            claim_sock.bind(("0.0.0.0", 0))
+                            claim_sock.settimeout(0.5)
+                            claim_sock.sendto(claim_req.SerializeToString(), (ip, 30012))
+                    except Exception as e:
+                        await _broadcast_log('HMI', f"Error during re-claim: {e}")
+
+async def boot_firmware_slot(ip: str, slot_hash: str):
+    global smp_in_progress, udp_target_ip
+    
+    was_claimed = False
+    lock = get_firmware_fetch_lock(ip)
+    async with lock:
+        async with _discovery_lock:
+            was_claimed = (udp_target_ip == ip)
+            smp_in_progress = True
+            try:
+                await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': 'Setting slot to pending'})
+                await smp_action.run_smp_action(ip, "pending", slot_hash)
+                
+                await asyncio.sleep(0.5)
+                
+                await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': 'Fetching status before reboot'})
+                try:
+                    result = await smp_fetcher.fetch_firmware_status(ip)
+                    if "data" in result:
+                        await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result["data"]})
+                except Exception as fetch_err:
+                    await _broadcast_log('HMI', f"Failed to fetch status before reboot: {fetch_err}")
+                
+                await asyncio.sleep(0.5)
+                
+                await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': 'Rebooting robot...'})
+                try:
+                    await smp_action.run_smp_action(ip, "reset", "none")
+                except Exception:
+                    pass # might fail if robot drops immediately
+                
+                await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': 'Waiting for boot...'})
+            except Exception as e:
+                await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': ''})
+                await _broadcast_log('HMI', f"Error booting slot: {e}")
+            finally:
+                smp_in_progress = False
+
+    # Try to fetch status up to 10 times (30 seconds)
+    import json
+    import sys
+    import subprocess
+    for i in range(10):
+        await asyncio.sleep(3.0)
+        try:
+            await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': f'Trying to fetch slot status... ({i+1}/10)'})
+            proc_fetch = await asyncio.create_subprocess_exec(
+                sys.executable, "smp_fetcher.py", ip,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE
+            )
+            stdout_fetch, _ = await proc_fetch.communicate()
+            if proc_fetch.returncode == 0:
+                result = json.loads(stdout_fetch.decode().strip())
+                if "data" in result:
+                    await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result["data"]})
+                    await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': ''})
+                    await _broadcast_log('HMI', f"Robot {ip} is back online!")
+                    if was_claimed:
+                        udp_target_ip = ip
+                    break
+        except Exception:
+            pass
+    else:
+        # Loop finished without breaking
+        await _broadcast_json({'type': 'firmware_boot_phase', 'ip': ip, 'hash': slot_hash, 'phase': ''})
+
+async def confirm_firmware_slot(ip: str, slot_hash: str):
+    global smp_in_progress
+    lock = get_firmware_fetch_lock(ip)
+    async with lock:
+        async with _discovery_lock:
+            smp_in_progress = True
+            try:
+                await _broadcast_log('HMI', f"Confirming firmware slot on {ip}...")
+                await smp_action.run_smp_action(ip, "confirm", slot_hash)
+                await _broadcast_log('HMI', f"Slot confirmed on {ip}.")
+            except Exception as e:
+                await _broadcast_log('HMI', f"Error confirming slot: {e}")
+            finally:
+                smp_in_progress = False
+    
+    # Refresh status after releasing locks
+    asyncio.create_task(fetch_firmware_status(ip))
+
+async def fetch_github_releases():
+    import urllib.request
+    import urllib.error
+    import json
+    
+    url = "https://api.github.com/repos/kabot-io/kabot-zephyr/releases"
+    try:
+        req = urllib.request.Request(url, headers={'User-Agent': 'kabot-hmi-mockup'})
+        loop = asyncio.get_event_loop()
+        def _fetch():
+            with urllib.request.urlopen(req) as response:
+                return json.loads(response.read().decode())
+        releases_data = await loop.run_in_executor(None, _fetch)
+        
+        valid_releases = []
+        for release in releases_data:
+            assets = release.get('assets', [])
+            for asset in assets:
+                if asset.get('name', '').endswith('.signed.bin'):
+                    valid_releases.append({
+                        'name': release.get('name') or release.get('tag_name'),
+                        'tag': release.get('tag_name'),
+                        'url': asset.get('browser_download_url'),
+                        'published_at': release.get('published_at')
+                    })
+                    break
+                    
+        await _broadcast_json({'type': 'github_releases', 'data': valid_releases})
+    except urllib.error.URLError as e:
+        await _broadcast_json({'type': 'github_releases', 'error': f"Failed to fetch releases: {e.reason}"})
+    except Exception as e:
+        await _broadcast_json({'type': 'github_releases', 'error': f"Failed to fetch releases: {e}"})
+
+async def flash_firmware(ip: str, fw_url: str = None):
+    global udp_target_ip, smp_in_progress
+    lock = get_firmware_fetch_lock(ip)
+        
+    if lock.locked():
+        await _broadcast_log('HMI', f"Firmware operation already in progress for {ip}, skipping")
+        return
+
+    async with lock:
+        async with _discovery_lock:
+            was_claimed = (udp_target_ip == ip)
+            if was_claimed:
+                await _broadcast_log('HMI', f"Temporarily releasing {ip} to safely flash firmware via SMP")
+                try:
+                    rel_req = pb2.Bonjour()
+                    rel_req.hmi_port = UDP_STATE_PORT
+                    rel_req.release = True
+                    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as rel_sock:
+                        rel_sock.bind(("0.0.0.0", 0))
+                        rel_sock.settimeout(0.5)
+                        rel_sock.sendto(rel_req.SerializeToString(), (ip, 30012))
+                        try:
+                            rel_sock.recvfrom(2048)
+                        except TimeoutError:
+                            pass
+                except Exception as e:
+                    await _broadcast_log('HMI', f"Error during temp release: {e}")
+                
+                udp_target_ip = None
+                
+            smp_in_progress = True
+            
+            await asyncio.sleep(2.0)
+
+            try:
+                # Pre-flight check: fetch firmware status
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Updating firmware status'})
+                await _broadcast_log('HMI', f"Fetching firmware status from {ip} before flashing...")
+                try:
+                    result_fetch = await smp_fetcher.fetch_firmware_status(ip)
+                    if "data" in result_fetch:
+                        await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result_fetch["data"]})
+                    else:
+                        raise RuntimeError("Status fetch failed: no data")
+                except Exception as fetch_err:
+                    raise RuntimeError(f"Status fetch failed: {fetch_err}")
+
+                # Give Zephyr UDP stack a moment to clean up before opening a new socket
+                await asyncio.sleep(0.5)
+
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Uploading firmware'})
+                await _broadcast_log('HMI', f"Flashing firmware to {ip} via isolated subprocess")
+                
+                if fw_url:
+                    await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Downloading firmware'})
+                    await _broadcast_log('HMI', f"Downloading firmware from {fw_url}...")
+                    
+                    import urllib.request
+                    import tempfile
+                    import shutil
+                    def _download():
+                        req = urllib.request.Request(fw_url, headers={'User-Agent': 'kabot-hmi-mockup'})
+                        with urllib.request.urlopen(req) as response:
+                            tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".signed.bin")
+                            shutil.copyfileobj(response, tmp_file)
+                            tmp_file.close()
+                            return tmp_file.name
+                            
+                    try:
+                        loop = asyncio.get_event_loop()
+                        fw_path = await loop.run_in_executor(None, _download)
+                        await _broadcast_log('HMI', f"Downloaded firmware to temporary file for flashing")
+                        # Re-broadcast phase back to Uploading firmware
+                        await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Uploading firmware'})
+                    except Exception as e:
+                        raise RuntimeError(f"Failed to download firmware: {e}")
+                else:
+                    raise RuntimeError("No firmware URL provided for flashing")
+                
+                async def progress_cb(prog: float):
+                    await _broadcast_json({
+                        'type': 'firmware_flash_progress',
+                        'ip': ip,
+                        'progress': prog
+                    })
+                
+                await smp_uploader.upload_firmware(ip, fw_path, progress_cb)
+                    
+                await asyncio.sleep(0.5)
+                await _broadcast_json({'type': 'firmware_flash_phase', 'ip': ip, 'phase': 'Updating firmware status'})
+                
+                # Post-flight fetch to get updated slots
+                try:
+                    result_fetch_post = await smp_fetcher.fetch_firmware_status(ip)
+                    if "data" in result_fetch_post:
+                        await _broadcast_json({'type': 'firmware_status', 'ip': ip, 'data': result_fetch_post["data"]})
+                except Exception:
+                    pass
+                    
+                await _broadcast_log('HMI', f"Firmware flash completed successfully for {ip}")
+                await _broadcast_json({'type': 'firmware_flash_success', 'ip': ip})
+            except Exception as e:
+                err_str = repr(e)
+                if len(err_str) > 200:
+                    err_str = err_str[:200] + '...'
+                await _broadcast_log('HMI', f"SMP flash failed for {ip}: {err_str}")
+                
+                # Forward the actual exception message so it shows in the UI
+                msg = str(e)
+                if len(msg) > 100:
+                    msg = msg[:97] + '...'
+                await _broadcast_json({'type': 'firmware_flash_error', 'ip': ip, 'message': msg})
+            finally:
+                smp_in_progress = False
+                
+                if was_claimed:
+                    await asyncio.sleep(0.5)
+                    await _broadcast_log('HMI', f"Re-claiming {ip} after firmware flash")
+                    udp_target_ip = ip
+                    try:
+                        claim_req = pb2.Bonjour()
+                        claim_req.hmi_port = UDP_STATE_PORT
+                        claim_req.claim = True
+                        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as claim_sock:
+                            claim_sock.bind(("0.0.0.0", 0))
+                            claim_sock.settimeout(0.5)
+                            claim_sock.sendto(claim_req.SerializeToString(), (ip, 30012))
+                    except Exception as e:
+                        await _broadcast_log('HMI', f"Error during re-claim: {e}")
 async def _set_runtime_active(active: bool):
     await _broadcast_json({'type': 'runtime_status', 'active': active})
 
@@ -232,121 +565,137 @@ sock_recv.setblocking(False)
 sock_send = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
 async def perform_discovery_sweep():
-    global udp_target_ip, UDP_CONTROL_PORT
-    await _broadcast_log('HMI', 'Starting robot discovery sweep...')
-    interfaces = psutil.net_if_addrs()
-    subnets = []
-    
-    local_ips = set()
-    for iface_name, addrs in interfaces.items():
-        for addr in addrs:
-            if addr.family == socket.AF_INET:
-                ip = addr.address
-                local_ips.add(ip)
-                netmask = addr.netmask
-                if netmask:
+    global active_connections, _discovery_lock, _firmware_fetch_locks, smp_in_progress
+    if smp_in_progress:
+        return
+        
+    if _discovery_lock.locked() or any(lock.locked() for lock in _firmware_fetch_locks.values()):
+        await _broadcast_log('HMI', 'Skipping robot discovery sweep because firmware fetch is in progress...')
+        return
+        
+    async with _discovery_lock:
+        await _broadcast_log('HMI', 'Starting robot discovery sweep...')
+        interfaces = psutil.net_if_addrs()
+        subnets = []
+        
+        local_ips = set()
+        for iface_name, addrs in interfaces.items():
+            for addr in addrs:
+                if addr.family == socket.AF_INET:
+                    ip = addr.address
+                    local_ips.add(ip)
+                    netmask = addr.netmask
+                    if netmask:
+                        try:
+                            network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
+                            # Exclude loopback and massive subnets (e.g. /8) which take hours to sweep
+                            if not network.is_loopback and network.num_addresses <= 65536:
+                                subnets.append(network)
+                        except ValueError:
+                            pass
+        
+        # Sort by size
+        subnets.sort(key=lambda n: n.num_addresses)
+        
+        sock_discover = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        sock_discover.setblocking(False)
+        sock_discover.bind(('0.0.0.0', 0))
+        
+        req = pb2.Bonjour()
+        req.hmi_port = UDP_STATE_PORT
+        req.claim = False
+        req.release = False
+        req_data = req.SerializeToString()
+        
+        discovered_robots = {}
+
+        def drain_socket():
+            max_reads = 500
+            while max_reads > 0:
+                max_reads -= 1
+                try:
+                    data, addr = sock_discover.recvfrom(2048)
+                    resp = pb2.BonjourResponse()
+                    resp.ParseFromString(data)
+                    
+                    info = {
+                        'serial': resp.serial,
+                        'human_name': resp.human_name,
+                        'firmware_version': resp.firmware_version,
+                        'ip': addr[0],
+                        'port': resp.control_port,
+                        'is_claimed': resp.is_claimed,
+                        'claimed_by_ip': resp.claimed_by_ip,
+                        'is_claimed_by_us': resp.is_claimed and (resp.claimed_by_ip in local_ips)
+                    }
+                    key = f"{resp.serial}_{addr[0]}"
+                    discovered_robots[key] = info
+                except BlockingIOError:
+                    break
+                except Exception:
+                    continue
+
+        last_sweep_time = getattr(perform_discovery_sweep, 'last_sweep_time', 0)
+        current_time = asyncio.get_event_loop().time()
+        if current_time - last_sweep_time < 5.0:
+            await _broadcast_log('HMI', 'Discovery sweep throttled (too soon).')
+            await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+            return
+        perform_discovery_sweep.last_sweep_time = current_time
+
+        await _broadcast_log('HMI', 'Starting fast broadcast discovery sweep...')
+        
+        # Broadcast scan
+        sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+        try:
+            sock_discover.sendto(req_data, ('255.255.255.255', 30012))
+        except Exception:
+            pass
+            
+        await asyncio.sleep(0.5)
+        drain_socket()
+        
+        if discovered_robots:
+            await _broadcast_log('HMI', f"Broadcast sweep finished. Found {len(discovered_robots)} robots.")
+            await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+            sock_discover.close()
+            return
+
+        # If no robots found by broadcast, proceed with full sweep
+        await _broadcast_log('HMI', 'No robots found via broadcast. Proceeding with full subnet sweep...')
+        for sweep_idx in range(1):
+            for subnet in subnets:
+                for ip in subnet.hosts():
+                    # Abort sweep if firmware fetch is requested
+                    if any(lock.locked() for lock in _firmware_fetch_locks.values()):
+                        await _broadcast_log('HMI', 'Aborting full subnet sweep due to firmware fetch request.')
+                        sock_discover.close()
+                        return
+                        
                     try:
-                        network = ipaddress.IPv4Network(f"{ip}/{netmask}", strict=False)
-                        subnets.append(network)
+                        sock_discover.sendto(req_data, (str(ip), 30012))
+                        await asyncio.sleep(0.001)  # tiny delay to not hog CPU/buffer
                     except Exception:
                         pass
-    
-    # Sort by size
-    subnets.sort(key=lambda n: n.num_addresses)
-    
-    sock_discover = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    sock_discover.setblocking(False)
-    sock_discover.bind(('0.0.0.0', 0))
-    
-    req = pb2.Bonjour()
-    req.hmi_port = UDP_STATE_PORT
-    req.claim = False
-    req.release = False
-    req_data = req.SerializeToString()
-    
-    discovered_robots = {}
-
-    def drain_socket():
-        max_reads = 500
-        while max_reads > 0:
-            max_reads -= 1
-            try:
-                data, addr = sock_discover.recvfrom(2048)
-                resp = pb2.BonjourResponse()
-                resp.ParseFromString(data)
-                
-                info = {
-                    'serial': resp.serial,
-                    'human_name': resp.human_name,
-                    'firmware_version': resp.firmware_version,
-                    'ip': addr[0],
-                    'port': resp.control_port,
-                    'is_claimed': resp.is_claimed,
-                    'claimed_by_ip': resp.claimed_by_ip,
-                    'is_claimed_by_us': resp.is_claimed and (resp.claimed_by_ip in local_ips)
-                }
-                key = f"{resp.serial}_{addr[0]}"
-                discovered_robots[key] = info
-            except BlockingIOError:
-                break
-            except Exception:
-                continue
-
-    last_sweep_time = getattr(perform_discovery_sweep, 'last_sweep_time', 0)
-    current_time = asyncio.get_event_loop().time()
-    if current_time - last_sweep_time < 5.0:
-        await _broadcast_log('HMI', 'Discovery sweep throttled (too soon).')
-        await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
-        return
-    perform_discovery_sweep.last_sweep_time = current_time
-
-    await _broadcast_log('HMI', 'Starting fast broadcast discovery sweep...')
-    
-    # Broadcast scan
-    sock_discover.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-    try:
-        sock_discover.sendto(req_data, ('255.255.255.255', 30012))
-    except Exception:
-        pass
+                drain_socket()
+                    
+        await _broadcast_log('HMI', 'Sweep packets sent. Waiting for late responses...')
+        await asyncio.sleep(0.8)
+        drain_socket()
         
-    await asyncio.sleep(0.5)
-    drain_socket()
-    
-    if discovered_robots:
-        await _broadcast_log('HMI', f"Broadcast sweep finished. Found {len(discovered_robots)} robots.")
-        await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+        if discovered_robots:
+            await _broadcast_log('HMI', f"Discovery sweep finished. Found {len(discovered_robots)} robots.")
+            await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
+        else:
+            await _broadcast_log('HMI', 'Discovery sweep finished. No robots found.')
+            await _broadcast_json({'type': 'robots_discovered', 'robots': []})
+            
         sock_discover.close()
-        return
-
-    # If no robots found by broadcast, proceed with full sweep
-    await _broadcast_log('HMI', 'No robots found via broadcast. Proceeding with full subnet sweep...')
-    for sweep_idx in range(1):
-        for subnet in subnets:
-            for ip in subnet.hosts():
-                try:
-                    sock_discover.sendto(req_data, (str(ip), 30012))
-                    await asyncio.sleep(0.001)  # tiny delay to not hog CPU/buffer
-                except Exception:
-                    pass
-            drain_socket()
-                
-    await _broadcast_log('HMI', 'Sweep packets sent. Waiting for late responses...')
-    await asyncio.sleep(0.8)
-    drain_socket()
-    
-    if discovered_robots:
-        await _broadcast_log('HMI', f"Discovery sweep finished. Found {len(discovered_robots)} robots.")
-        await _broadcast_json({'type': 'robots_discovered', 'robots': list(discovered_robots.values())})
-    else:
-        await _broadcast_log('HMI', 'Discovery sweep finished. No robots found.')
-        await _broadcast_json({'type': 'robots_discovered', 'robots': []})
-        
-    sock_discover.close()
 
 async def udp_loop():
-    global current_user_code, current_user_callable, backend_port_conflict
+    global current_user_code, current_user_callable, backend_port_conflict, smp_in_progress
     while True:
-        if backend_port_conflict:
+        if backend_port_conflict or smp_in_progress:
             await asyncio.sleep(1)
             continue
         try:
@@ -412,12 +761,12 @@ async def udp_loop():
 original_ppid = os.getppid()
 
 async def continuous_ping():
-    global udp_target_ip, UDP_STATE_PORT
+    global udp_target_ip, UDP_STATE_PORT, smp_in_progress
     fail_count = 0
     last_ping_status = 'disconnected'
     while True:
         await asyncio.sleep(1)
-        if not udp_target_ip:
+        if not udp_target_ip or smp_in_progress:
             fail_count = 0
             last_ping_status = 'disconnected'
             continue
@@ -440,7 +789,7 @@ async def continuous_ping():
                     last_ping_status = 'connected'
         except Exception:
             fail_count += 1
-            if fail_count >= 3:
+            if fail_count >= 10:
                 print(f"Ping failed {fail_count} times. Disconnecting.")
                 await _broadcast_json({'type': 'robot_disconnected', 'ip': udp_target_ip})
                 udp_target_ip = None
@@ -639,7 +988,43 @@ async def websocket_endpoint(websocket: WebSocket):
                             await _broadcast_log('HMI', f"Claim sent to {udp_target_ip} but timed out")
                 except Exception as e:
                     await _broadcast_log('HMI', f"Error claiming {udp_target_ip}: {e}")
+                    udp_target_ip = None
+                    UDP_CONTROL_PORT = 30010
+            
+            elif msg.get('type') == 'refresh_firmware_status':
+                target_ip = msg.get('ip') or udp_target_ip
+                if target_ip:
+                    asyncio.create_task(fetch_firmware_status(target_ip))
+                else:
+                    await _send_log(websocket, 'HMI', "Cannot refresh firmware status: no IP provided and no robot claimed")
+
+            elif msg.get('type') == 'fetch_github_releases':
+                asyncio.create_task(fetch_github_releases())
+
+            elif msg.get('type') == 'boot_slot':
+                target_ip = msg.get('ip') or udp_target_ip
+                slot_hash = msg.get('hash')
+                if target_ip and slot_hash:
+                    asyncio.create_task(boot_firmware_slot(target_ip, slot_hash))
+                else:
+                    await _send_log(websocket, 'HMI', "Cannot boot slot: missing IP or hash")
                     
+            elif msg.get('type') == 'confirm_slot':
+                target_ip = msg.get('ip') or udp_target_ip
+                slot_hash = msg.get('hash')
+                if target_ip and slot_hash:
+                    asyncio.create_task(confirm_firmware_slot(target_ip, slot_hash))
+                else:
+                    await _send_log(websocket, 'HMI', "Cannot confirm slot: missing IP or hash")
+
+            elif msg.get('type') == 'flash_firmware':
+                target_ip = msg.get('ip') or udp_target_ip
+                fw_url = msg.get('url')
+                if target_ip:
+                    asyncio.create_task(flash_firmware(target_ip, fw_url))
+                else:
+                    await _send_log(websocket, 'HMI', "Cannot flash firmware: no IP provided")
+
             elif msg.get('type') == 'release_robot':
                 print(f"WS release_robot")
                 if udp_target_ip:

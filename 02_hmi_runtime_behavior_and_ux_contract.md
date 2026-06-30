@@ -76,3 +76,13 @@ The shell output renderer supports major VT100/ANSI classes used by shell output
 ## Target Stack Delta, short section
 
 Under web frontend migration, the same behavior contract should remain stable. Only rendering technology and component implementation change.
+
+## Firmware Update UX Contract
+- Firmware updates are performed via MCUmgr SMP.
+- Firmware update progress is displayed with a progress bar and phase string.
+- Release selection is driven by fetching GitHub releases for `kabot-zephyr`.
+- Flash operation stats (duration, hash, date) are retained across HMI sessions.
+- Users can manually override the SMP target IP or let it auto-populate from the selected robot.
+- All SMP actions (update, confirm, reboot) disable other SMP-related controls during execution.
+- Active slot is always sorted at the top.
+- "Reboot" button is only available for the active slot when it is confirmed.

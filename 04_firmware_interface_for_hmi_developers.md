@@ -67,3 +67,10 @@ Nominal producer rates documented in firmware data flow:
 - Light: 2 Hz
 
 HMI should not hardcode these values as strict guarantees.
+
+## Firmware Update / Image Management Contract
+- Group in use: IMG_MGMT
+- SMP MTU: explicitly constrained to 1200 to avoid firmware-side memory exhaustion or packet fragmentation over Wi-Fi.
+- Flash updates require sending `confirm=False` (pending) then issuing an OS Reset.
+- HMI should query slots after reboot to verify new active hash.
+- UDP Discovery Service frames (30012) are explicitly dropped by the firmware when SMP Image uploads are actively streaming to prevent system workqueue exhaustion and watchdog resets.

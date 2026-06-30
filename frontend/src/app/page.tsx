@@ -10,7 +10,7 @@ import { Input } from "@/components/ui/input";
 import { ResizableHandle, ResizablePanel, ResizablePanelGroup } from "@/components/ui/resizable";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy } from 'lucide-react';
+import { Check, ArrowRight, Square, Search, Settings, TerminalSquare, Activity, Play, Wand, Unplug, Download, Upload, ChevronDown, ChevronUp, ChevronLeft, ChevronRight, Copy, RefreshCw, CheckCircle, Lock } from 'lucide-react';
 import { UPlotScope } from "@/components/ui/UPlotScope";
 import { SpinBox } from "@/components/ui/spinbox";
 import { ChannelConfig, ScopeState, TriggerType } from "@/types/scope";
@@ -215,6 +215,65 @@ export default function Home() {
   
   const [triggerSourceKey, setTriggerSourceKey] = useState<string | null>(null);
   const triggerSourceKeyRef = useRef<string | null>(null);
+  const lastGithubFetchRef = useRef<number>(0);
+  
+  const flashStartTimeRef = useRef<number>(0);
+  const pendingFlashStatsRef = useRef<any>(null);
+  const [lastFlashStats, setLastFlashStats] = useState<any>(null);
+
+  useEffect(() => {
+    const saved = localStorage.getItem("last_firmware_update_stats");
+    if (saved) {
+      try { setLastFlashStats(JSON.parse(saved)); } catch (e) {}
+    }
+  }, []);
+
+  useEffect(() => {
+    if (lastFlashStats) {
+      localStorage.setItem("last_firmware_update_stats", JSON.stringify(lastFlashStats));
+    }
+  }, [lastFlashStats]);
+  
+  const [isSettingsLocked, setIsSettingsLocked] = useState(false);
+  
+  useEffect(() => {
+    const locked = localStorage.getItem("kabot_settings_locked");
+    if (locked === "true") setIsSettingsLocked(true);
+  }, []);
+
+  useEffect(() => {
+    localStorage.setItem("kabot_settings_locked", String(isSettingsLocked));
+  }, [isSettingsLocked]);
+
+  useEffect(() => {
+    if (!isSettingsLocked || activeWorkspace !== "firmware") return;
+
+    let keySequence: string[] = [];
+    const targetSequence = ['arrowup', 'arrowup', 'arrowdown', 'arrowdown', 'arrowleft', 'arrowright', 'arrowleft', 'arrowright', 'b', 'a'];
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      keySequence.push(e.key.toLowerCase());
+      if (keySequence.length > targetSequence.length) {
+        keySequence.shift();
+      }
+      
+      if (keySequence.length === targetSequence.length) {
+        let match = true;
+        for (let i = 0; i < targetSequence.length; i++) {
+          if (keySequence[i] !== targetSequence[i]) {
+            match = false;
+            break;
+          }
+        }
+        if (match) {
+          setIsSettingsLocked(false);
+        }
+      }
+    };
+
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => window.removeEventListener("keydown", handleKeyDown, true);
+  }, [isSettingsLocked, activeWorkspace]);
   
   // Track triggered wait state
   const isTriggerWaitingRef = useRef(false);
@@ -261,7 +320,7 @@ export default function Home() {
   const [scriptName, setScriptName] = useState("control.py");
   
   const [robotIp, setRobotIp] = useState("localhost");
-  const [isAutoSearchEnabled, setIsAutoSearchEnabled] = useState(true);
+  const [isAutoSearchEnabled, setIsAutoSearchEnabled] = useState(false);
   const [backendPort, setBackendPort] = useState<number>(8000);
 
   useEffect(() => {
@@ -286,6 +345,20 @@ export default function Home() {
   const [manualDirectionsUI, setManualDirectionsUI] = useState<Set<ControlDirection>>(new Set());
   const lastManualControlRef = useRef<{ x: number; y: number }>({ x: 0, y: 0 });
   const [copiedPath, setCopiedPath] = useState<string | null>(null);
+  
+  const [firmwareStatusMap, setFirmwareStatusMap] = useState<Record<string, any[]>>({});
+  const [firmwareStatusErrorMap, setFirmwareStatusErrorMap] = useState<Record<string, string>>({});
+  const [isFetchingFirmware, setIsFetchingFirmware] = useState(false);
+  const [manualSmpIp, setManualSmpIp] = useState("");
+  const [isFlashingFirmware, setIsFlashingFirmware] = useState(false);
+  const [flashPhase, setFlashPhase] = useState("");
+  const [flashProgress, setFlashProgress] = useState(0);
+  const [flashError, setFlashError] = useState("");
+  const [bootingSlotHash, setBootingSlotHash] = useState("");
+  const [bootingPhase, setBootingPhase] = useState("");
+  const [githubReleases, setGithubReleases] = useState<any[]>([]);
+  const [selectedReleaseUrl, setSelectedReleaseUrl] = useState<string>("");
+  const [releasesError, setReleasesError] = useState<string>("");
 
   const getEditorCode = () => {
     if (editorRef.current) {
@@ -377,6 +450,11 @@ export default function Home() {
       wsRef.current = new WebSocket(`ws://${robotIp}:${backendPort}/ws`);
       wsRef.current.onopen = () => {
         setBackendConnected(true);
+        const now = Date.now();
+        if (now - lastGithubFetchRef.current > 120000) {
+          lastGithubFetchRef.current = now;
+          wsRef.current?.send(JSON.stringify({ type: "fetch_github_releases" }));
+        }
       };
       wsRef.current.onclose = () => {
         setBackendConnected(false);
@@ -505,12 +583,81 @@ export default function Home() {
           setRobotConnectionStatus('disconnected');
           setSelectedRobotSerial("");
           setDiscoveredRobots(prev => prev.filter(r => r.ip !== msg.ip));
+          setFirmwareStatusMap(prev => {
+            const next = {...prev};
+            delete next[msg.ip];
+            return next;
+          });
+          setFirmwareStatusErrorMap(prev => {
+            const next = {...prev};
+            delete next[msg.ip];
+            return next;
+          });
         } else if (msg.type === "robot_released") {
           setConnectedRobot(null);
           setRobotConnectionStatus('disconnected');
           setDiscoveredRobots(prev => prev.map(r => 
             (msg.ip ? r.ip === msg.ip : true) ? { ...r, is_claimed: false, is_claimed_by_us: false } : r
           ));
+          setFirmwareStatusMap({});
+          setFirmwareStatusErrorMap({});
+        } else if (msg.type === "firmware_status") {
+          if (msg.ip) {
+            setFirmwareStatusMap(prev => ({...prev, [msg.ip]: msg.data}));
+            setFirmwareStatusErrorMap(prev => ({...prev, [msg.ip]: ""}));
+            if (pendingFlashStatsRef.current) {
+                const inactiveSlot = msg.data.find((s: any) => !s.active);
+                if (inactiveSlot && inactiveSlot.hash) {
+                    setLastFlashStats({
+                        ...pendingFlashStatsRef.current,
+                        hash: inactiveSlot.hash
+                    });
+                    pendingFlashStatsRef.current = null;
+                }
+            }
+          }
+          setIsFetchingFirmware(false);
+          setBootingSlotHash("");
+          setBootingPhase("");
+        } else if (msg.type === "firmware_boot_phase") {
+          if (msg.hash) setBootingSlotHash(msg.hash);
+          if (msg.phase !== undefined) setBootingPhase(msg.phase);
+        } else if (msg.type === "firmware_status_error") {
+          if (msg.ip) {
+            setFirmwareStatusErrorMap(prev => ({...prev, [msg.ip]: msg.message}));
+          }
+          setIsFetchingFirmware(false);
+        } else if (msg.type === "firmware_flash_progress") {
+          setIsFlashingFirmware(true);
+          setFlashProgress(msg.progress);
+          setFlashError("");
+        } else if (msg.type === "firmware_flash_phase") {
+          setIsFlashingFirmware(true);
+          setFlashPhase(msg.phase);
+          setFlashError("");
+        } else if (msg.type === "firmware_flash_success") {
+          setIsFlashingFirmware(false);
+          setFlashProgress(0);
+          setFlashPhase("");
+          setFlashError("");
+          if (flashStartTimeRef.current > 0 && pendingFlashStatsRef.current) {
+              pendingFlashStatsRef.current.durationSec = Math.round((Date.now() - flashStartTimeRef.current) / 1000);
+              pendingFlashStatsRef.current.date = new Date().toLocaleString();
+          }
+        } else if (msg.type === "github_releases") {
+          if (msg.error) {
+            setReleasesError(msg.error);
+            setGithubReleases([]);
+          } else {
+            setReleasesError("");
+            setGithubReleases(msg.data || []);
+            if (msg.data && msg.data.length > 0 && !selectedReleaseUrl) {
+              setSelectedReleaseUrl(msg.data[0].url);
+            }
+          }
+        } else if (msg.type === "firmware_flash_error") {
+          setIsFlashingFirmware(false);
+          setFlashError(msg.message);
         } else if (msg.type === "port_conflict") {
           setPortConflictError(msg.port);
         } else if (msg.type === "state") {
@@ -797,6 +944,9 @@ export default function Home() {
       clearManualDirections();
     }
   }, [activeWorkspace]);
+
+
+
 
   const handleRun = () => {
     const runtimeCode = getEditorCode();
@@ -1161,6 +1311,19 @@ export default function Home() {
 
   const displayRobot = connectedRobot || discoveredRobots.find(r => `${r.serial}_${r.ip}` === selectedRobotSerial);
 
+  useEffect(() => {
+    if (displayRobot?.ip) {
+      setManualSmpIp(displayRobot.ip);
+    }
+  }, [displayRobot?.ip]);
+
+  const activeSmpIp = manualSmpIp || displayRobot?.ip;
+  const hasUnconfirmedActiveSlot = activeSmpIp && firmwareStatusMap[activeSmpIp]
+    ? firmwareStatusMap[activeSmpIp].some((s: any) => s.active && !s.confirmed)
+    : false;
+  
+  const isSmpActionInProgress = isFetchingFirmware || isFlashingFirmware || bootingPhase !== "";
+
   return (
     <div className="flex h-screen w-screen overflow-hidden bg-background text-foreground text-sm font-sans">
       <div className="w-14 shrink-0 border-r flex flex-col items-center py-4 gap-6 bg-muted/10">
@@ -1193,6 +1356,14 @@ export default function Home() {
       </div>
 
       <div className="flex-1 flex flex-col min-w-0 min-h-0 relative">
+        {isSettingsLocked && activeWorkspace === "firmware" && (
+            <div className="absolute inset-0 z-50 bg-background/80 backdrop-blur-sm flex items-center justify-center">
+              <div className="grid w-full max-w-md gap-4 rounded-xl bg-popover p-6 text-center shadow-lg ring-1 ring-foreground/10 animate-in fade-in-0 zoom-in-95">
+                <h2 className="text-lg font-semibold tracking-tight">Settings are locked.</h2>
+                <p className="text-sm text-muted-foreground">Have you played Contra?</p>
+              </div>
+            </div>
+        )}
         
         {/* Contextual Toolbar */}
         {activeWorkspace === "code" && (
@@ -1333,7 +1504,93 @@ export default function Home() {
 
         {activeWorkspace === "firmware" && (
             <div className="h-12 border-b flex items-center px-4 gap-4 shrink-0 bg-background w-full">
-                <Button size="sm" variant="default" className="font-bold" onClick={() => alert("This functionality will be available soon. Sorry.")}><Download className="w-4 h-4 mr-2" /> Firmware Update</Button>
+                <div title={hasUnconfirmedActiveSlot ? "Please confirm the active slot before updating firmware." : ""}>
+                    <Button 
+                        size="sm" 
+                        className="w-48 font-semibold"
+                        disabled={isSmpActionInProgress || !activeSmpIp || hasUnconfirmedActiveSlot || isFetchingFirmware || (!isFlashingFirmware && !selectedReleaseUrl)}
+                        onClick={() => {
+                            const targetIp = manualSmpIp || displayRobot?.ip;
+                            if (targetIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                                setIsFlashingFirmware(true);
+                                setFlashPhase("Initiating...");
+                                setFlashProgress(0);
+                                setFlashError("");
+                                flashStartTimeRef.current = Date.now();
+                                const release = githubReleases.find(r => r.assets?.some((a: any) => a.browser_download_url === selectedReleaseUrl));
+                                pendingFlashStatsRef.current = {
+                                    version: release ? release.tag_name : "Unknown",
+                                    releaseDate: release ? new Date(release.published_at).toLocaleString() : "Unknown",
+                                };
+                                wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp, url: selectedReleaseUrl }));
+                            }
+                        }}
+                    >
+                        <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
+                        {isFlashingFirmware ? (
+                            flashPhase === "Uploading firmware" && flashProgress > 0 
+                                ? `Uploading... ${flashProgress.toFixed(1)}%` 
+                                : (flashPhase === "Updating firmware status" ? "Updating status" : flashPhase)
+                        ) : "Firmware Update"}
+                    </Button>
+                </div>
+                
+                {isFlashingFirmware ? (
+                    <div className="w-64 mx-4 bg-muted rounded-full h-3 overflow-hidden">
+                        <div className="bg-primary h-full transition-all duration-300" style={{width: `${flashProgress}%`}} />
+                    </div>
+                ) : (
+                    <div className="w-64 mx-4">
+                        <Select 
+                            value={selectedReleaseUrl} 
+                            onValueChange={(val) => { if (val) setSelectedReleaseUrl(val); }}
+                            disabled={isSmpActionInProgress || isFetchingFirmware || githubReleases.length === 0}
+                        >
+                            <SelectTrigger className="w-full">
+                                <SelectValue placeholder={githubReleases.length === 0 ? (releasesError ? "Error loading releases" : "Loading releases...") : "Select firmware release..."}>
+                                    {githubReleases.find(r => r.url === selectedReleaseUrl)?.name}
+                                </SelectValue>
+                            </SelectTrigger>
+                            <SelectContent>
+                                {githubReleases.map((release) => (
+                                    <SelectItem key={release.url} value={release.url}>
+                                        {release.name}
+                                    </SelectItem>
+                                ))}
+                            </SelectContent>
+                        </Select>
+                    </div>
+                )}
+                
+                {flashError && <span className="text-red-500 text-sm font-medium ml-4 cursor-help" title={flashError}>Flashing failed. Hover for details.</span>}
+                {!flashError && releasesError && <span className="text-red-500 text-sm font-medium ml-4 cursor-help" title={releasesError}>Releases fetch failed. Hover for details.</span>}
+                
+                <div className="flex-1" />
+                
+                <Button 
+                    size="icon" 
+                    variant="outline" 
+                    onClick={() => {
+                        setIsFetchingFirmware(true);
+                        setReleasesError("");
+                        const targetIp = manualSmpIp || displayRobot?.ip;
+                        if (targetIp) {
+                          setFirmwareStatusErrorMap(prev => ({...prev, [targetIp]: ""}));
+                        }
+                        if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                            wsRef.current.send(JSON.stringify({ type: "refresh_firmware_status", ip: targetIp }));
+                            const now = Date.now();
+                            if (now - lastGithubFetchRef.current > 120000) {
+                                lastGithubFetchRef.current = now;
+                                wsRef.current.send(JSON.stringify({ type: "fetch_github_releases" }));
+                            }
+                        }
+                    }}
+                    title="Refresh Firmware Status"
+                    disabled={isSmpActionInProgress || !(manualSmpIp || displayRobot?.ip)}
+                >
+                    <RefreshCw className={`w-4 h-4 ${isFetchingFirmware ? 'animate-spin text-muted-foreground' : ''}`} />
+                </Button>
                 <div className="w-px h-6 bg-border mx-2" />
                 <div className="flex-1" />
                 <div className="w-px h-6 bg-border mx-2" />
@@ -1439,8 +1696,14 @@ export default function Home() {
 
             {activeWorkspace === "firmware" && (
                 <ResizablePanelGroup orientation="vertical" className="h-full">
-                  <ResizablePanel defaultSize={60} minSize={20} className="flex flex-col bg-background border-b p-4">
-                     <h2 className="text-xl font-bold mb-6">Settings</h2>
+                  <ResizablePanel defaultSize={60} minSize={20} className="flex flex-col bg-background border-b p-4 relative">
+                     <h2 className="text-xl font-bold mb-6 flex justify-between items-center">
+                       Settings
+                       <Button variant="outline" size="sm" onClick={() => setIsSettingsLocked(true)}>
+                         <Lock className="w-4 h-4 mr-2" />
+                         Lock Settings
+                       </Button>
+                     </h2>
                      <div className="flex flex-col gap-8 max-w-2xl">
                         
                         {/* HMI Status */}
@@ -1507,6 +1770,116 @@ export default function Home() {
                                 </div>
                             ) : (
                                 <div className="text-sm text-muted-foreground italic mt-2">No robot is currently selected or connected.</div>
+                            )}
+                        </div>
+
+                        {/* Firmware Status */}
+                        <div className="flex flex-col gap-3">
+                            <div className="flex items-center justify-between border-b pb-1">
+                                <h3 className="text-sm font-bold uppercase tracking-wider text-muted-foreground">Firmware Status</h3>
+                                <div className="flex items-center gap-2">
+                                    <span className="text-xs text-muted-foreground">SMP IP Override:</span>
+                                    <Input 
+                                        className="h-6 w-32 text-xs" 
+                                        placeholder="192.168.x.x" 
+                                        value={manualSmpIp}
+                                        onChange={(e) => setManualSmpIp(e.target.value)}
+                                    />
+                                </div>
+                            </div>
+                            
+                            {activeSmpIp && firmwareStatusErrorMap[activeSmpIp] ? (
+                                <div className="text-sm text-red-500 font-medium mt-2">{firmwareStatusErrorMap[activeSmpIp]}</div>
+                            ) : (activeSmpIp && firmwareStatusMap[activeSmpIp] && firmwareStatusMap[activeSmpIp].length > 0) ? (
+                                <div className="flex flex-col gap-4 mt-2">
+                                    {[...firmwareStatusMap[activeSmpIp]].sort((a: any, b: any) => (a.active === b.active ? 0 : a.active ? -1 : 1)).map((slot: any, idx: number) => (
+                                        <div key={idx} className="border rounded-md p-3 bg-muted/20">
+                                            <div className="flex items-center justify-between mb-2 pb-1 border-b">
+                                                <h4 className="font-bold text-sm">{slot.active ? "Active Slot" : "Inactive Slot"}</h4>
+                                                <div className="flex gap-2">
+                                                    {slot.bootable && !slot.active && (
+                                                        <Button 
+                                                            size="sm" 
+                                                            disabled={isSmpActionInProgress}
+                                                            onClick={() => {
+                                                                if (activeSmpIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                                                                    setBootingSlotHash(slot.hash);
+                                                                    setBootingPhase("Starting boot...");
+                                                                    wsRef.current.send(JSON.stringify({ type: "boot_slot", ip: activeSmpIp, hash: slot.hash }));
+                                                                    setIsFetchingFirmware(true);
+                                                                }
+                                                            }}
+                                                        >
+                                                            <Upload className={`w-4 h-4 mr-2 ${bootingSlotHash === slot.hash && bootingPhase !== "" ? 'animate-pulse' : ''}`} /> 
+                                                            {bootingSlotHash === slot.hash && bootingPhase !== "" ? bootingPhase : "Boot"}
+                                                        </Button>
+                                                    )}
+                                                    {slot.active && slot.confirmed && (
+                                                        <Button 
+                                                            variant="secondary"
+                                                            size="sm" 
+                                                            disabled={isSmpActionInProgress}
+                                                            onClick={() => {
+                                                                if (activeSmpIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                                                                    setBootingSlotHash(slot.hash);
+                                                                    setBootingPhase("Starting reboot...");
+                                                                    wsRef.current.send(JSON.stringify({ type: "boot_slot", ip: activeSmpIp, hash: slot.hash }));
+                                                                    setIsFetchingFirmware(true);
+                                                                }
+                                                            }}
+                                                        >
+                                                            <Upload className={`w-4 h-4 mr-2 ${bootingSlotHash === slot.hash && bootingPhase !== "" ? 'animate-pulse' : ''}`} /> 
+                                                            {bootingSlotHash === slot.hash && bootingPhase !== "" ? bootingPhase : "Reboot"}
+                                                        </Button>
+                                                    )}
+                                                    {slot.bootable && slot.active && !slot.confirmed && (
+                                                        <Button 
+                                                            size="sm" 
+                                                            disabled={isSmpActionInProgress}
+                                                            onClick={() => {
+                                                                if (activeSmpIp && wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
+                                                                    wsRef.current.send(JSON.stringify({ type: "confirm_slot", ip: activeSmpIp, hash: slot.hash }));
+                                                                    setIsFetchingFirmware(true);
+                                                                }
+                                                            }}
+                                                        >
+                                                            <CheckCircle className="w-4 h-4 mr-2" /> 
+                                                            Confirm
+                                                        </Button>
+                                                    )}
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-2 gap-4 text-sm">
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Version</span>
+                                                    <span className="font-medium mt-1">{slot.version || "N/A"}</span>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Hash</span>
+                                                    <span className="font-medium mt-1 font-mono">{slot.hash ? slot.hash.substring(0, 8) : "N/A"}</span>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Active</span>
+                                                    <span className="font-medium mt-1">{slot.active ? "Yes" : "No"}</span>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Confirmed</span>
+                                                    <span className="font-medium mt-1">{slot.confirmed ? "Yes" : "No"}</span>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Pending</span>
+                                                    <span className="font-medium mt-1">{slot.pending ? "Yes" : "No"}</span>
+                                                </div>
+                                                <div className="flex flex-col">
+                                                    <span className="text-muted-foreground text-xs">Bootable</span>
+                                                    <span className="font-medium mt-1">{slot.bootable ? "Yes" : "No"}</span>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    ))}
+                                </div>
+                            ) : (
+                                <div className="text-sm text-muted-foreground italic mt-2">No firmware data available.</div>
                             )}
                         </div>
 
