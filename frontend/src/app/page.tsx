@@ -1525,10 +1525,6 @@ export default function Home() {
                                 wsRef.current.send(JSON.stringify({ type: "flash_firmware", ip: targetIp, url: selectedReleaseUrl }));
                             }
                         }}
-                        title={lastFlashStats 
-                            ? `Last firmware update:\n${lastFlashStats.date}, ${lastFlashStats.version}, took ${lastFlashStats.durationSec} seconds. Firmware hash: ${lastFlashStats.hash}. Last release update: ${lastFlashStats.releaseDate}.`
-                            : "Update firmware"
-                        }
                     >
                         <Download className={`w-4 h-4 mr-2 ${isFlashingFirmware ? 'animate-bounce' : ''}`} /> 
                         {isFlashingFirmware ? (

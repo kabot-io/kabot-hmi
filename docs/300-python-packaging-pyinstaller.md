@@ -9,5 +9,10 @@ To eliminate the need for end-users to install Python, `kabot-hmi` uses PyInstal
 
 The master build script `build_appimage.sh` handles this compilation before feeding the resulting binary to the Tauri build process described in [200 Tauri Sidecar Pattern](./200-tauri-sidecar-pattern.md).
 
+## Subprocess vs Native Async Modules
+When packaging with PyInstaller, `sys.executable` points to the PyInstaller-bundled executable (`kabot_backend`), NOT a standard Python interpreter. This means that spawning Python scripts via `subprocess.Popen([sys.executable, "script.py"])` will fail in production.
+
+For this reason, secondary tasks like SMP firmware management (e.g. `smp_fetcher.py`, `smp_uploader.py`, `smp_action.py`) must be written as async modules and imported directly into `main.py`'s event loop.
+
 ---
 #python #pyinstaller #packaging #build
